@@ -47,10 +47,31 @@ import (
 //	 for index in activation_queue[:get_validator_churn_limit(state)]:
 //	     validator = state.validators[index]
 //	     validator.activation_epoch = compute_activation_exit_epoch(get_current_epoch(state))
+// LightChain: persistent-inactivity ejection threshold.
+// Validators whose inactivity score reaches this value are forced to exit
+// (instead of having their stake burned via the inactivity penalty, which
+// is skipped on this fork to preserve the fixed-supply invariant).
+//
+// With INACTIVITY_SCORE_BIAS=4 (mainnet default), score grows by 4 per
+// missed-target epoch and recovers by min(16, score) per healthy epoch
+// (when not in inactivity leak). A score of 256 corresponds to ~64 epochs
+// (≈6.8 hours on mainnet, ≈12 minutes on the LightChain devnet) of
+// continuous offline behavior. Honest validators that briefly miss an
+// attestation never reach this threshold thanks to the recovery rate.
+const InactivityScoreEjectionThreshold uint64 = 256
+
 func ProcessRegistryUpdates(ctx context.Context, st state.BeaconState) (state.BeaconState, error) {
 	currentEpoch := time.CurrentEpoch(st)
 	var err error
 	ejectionBal := params.BeaconConfig().EjectionBalance
+
+	// LightChain: read inactivity scores once before the validator loop so we
+	// can also eject validators with persistently high scores (in addition to
+	// those below EjectionBalance).
+	inactivityScores, err := st.InactivityScores()
+	if err != nil {
+		return st, fmt.Errorf("failed to read inactivity scores: %w", err)
+	}
 
 	// To avoid copying the state validator set via st.Validators(), we will perform a read only pass
 	// over the validator set while collecting validator indices where the validator copy is actually
@@ -68,7 +89,9 @@ func ProcessRegistryUpdates(ctx context.Context, st state.BeaconState) (state.Be
 		// Collect validators to eject.
 		isActive := helpers.IsActiveValidatorUsingTrie(val, currentEpoch)
 		belowEjectionBalance := val.EffectiveBalance() <= ejectionBal
-		if isActive && belowEjectionBalance {
+		// LightChain: also eject validators with persistent inactivity.
+		highInactivity := idx < len(inactivityScores) && inactivityScores[idx] >= InactivityScoreEjectionThreshold
+		if isActive && (belowEjectionBalance || highInactivity) {
 			eligibleForEjection = append(eligibleForEjection, primitives.ValidatorIndex(idx))
 		}
 

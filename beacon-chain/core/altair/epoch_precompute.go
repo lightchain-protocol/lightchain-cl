@@ -249,7 +249,14 @@ func ProcessRewardsAndPenaltiesPrecompute(
 		if err != nil {
 			return nil, err
 		}
-		balances[i] = helpers.DecreaseBalanceWithVal(balances[i], delta.SourcePenalty+delta.TargetPenalty+delta.InactivityPenalty)
+		// LightChain: skip InactivityPenalty in the balance decrement to preserve
+		// the fixed-supply guarantee. Persistently inactive validators are
+		// instead force-exited via ProcessRegistryUpdates (which calls
+		// InitiateValidatorExit), and their stake is returned to their EL
+		// withdrawal address via the normal Capella withdrawal mechanism.
+		// The inactivity score is still tracked in ProcessInactivityScores so
+		// the ejection logic can detect persistent inactivity.
+		balances[i] = helpers.DecreaseBalanceWithVal(balances[i], delta.SourcePenalty+delta.TargetPenalty)
 
 		vals[i].AfterEpochTransitionBalance = balances[i]
 	}
