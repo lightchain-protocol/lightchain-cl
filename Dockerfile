@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 # Base images pinned to minor+OS version for reproducibility.
 # Bump these together when upgrading Go or the Alpine runtime base.
 ARG GO_IMAGE=golang:1.25-alpine3.22
