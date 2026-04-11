@@ -53,6 +53,11 @@ COPY --from=builder /out/beacon-chain /usr/local/bin/beacon-chain
 COPY --from=builder /out/validator    /usr/local/bin/validator
 COPY --from=builder /out/prysmctl     /usr/local/bin/prysmctl
 
+# Pre-create directories that docker-compose mounts as named volumes or that
+# Prysm writes to at runtime. Without this, Docker creates the mount points
+# as root:root and the non-root prysm user gets "permission denied".
+RUN mkdir -p /beacondata /data && chown prysm:prysm /beacondata /data
+
 USER prysm
 WORKDIR /home/prysm
 
