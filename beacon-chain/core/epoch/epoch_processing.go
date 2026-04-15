@@ -23,6 +23,26 @@ import (
 	"github.com/pkg/errors"
 )
 
+// inactivityScoreEjectionThreshold is the LightChain persistent-inactivity
+// ejection threshold. Validators whose inactivity score reaches this value
+// are force-exited (instead of having their stake burned via the inactivity
+// penalty, which is skipped on this fork to preserve the fixed-supply
+// invariant).
+//
+// With INACTIVITY_SCORE_BIAS=4 (mainnet default), score grows by 4 per
+// missed-target epoch while the chain is in inactivity leak, and recovers
+// by min(16, score) per healthy epoch once the chain finalizes again. A
+// score of 256 corresponds to ~64 consecutive leak epochs (≈6.8 hours on
+// mainnet, ≈12 minutes on the LightChain devnet) of continuous offline
+// behavior. Honest validators that briefly miss an attestation never reach
+// this threshold because the recovery rate outpaces the bias outside leak.
+//
+// Caveat: a validator that is permanently offline while the chain keeps
+// finalizing (i.e. its absence does not itself cause a leak) will not
+// accumulate score and therefore will not be ejected via this path — see
+// docs/concerns.md in the orchestrator repo for the intentional trade-off.
+const inactivityScoreEjectionThreshold uint64 = 256
+
 // ProcessRegistryUpdates rotates validators in and out of active pool.
 // the amount to rotate is determined churn limit.
 //
@@ -52,6 +72,31 @@ func ProcessRegistryUpdates(ctx context.Context, st state.BeaconState) (state.Be
 	var err error
 	ejectionBal := params.BeaconConfig().EjectionBalance
 
+	// LightChain: read inactivity scores once before the validator loop so we
+	// can also eject validators with persistently high scores (in addition to
+	// those below EjectionBalance).
+	//
+	// InactivityScores is an Altair+ field; on Phase 0 states the getter
+	// returns errNotSupported, so we skip the read entirely there. An empty
+	// (length 0) scores slice is treated as "no inactivity data available"
+	// and falls through to balance-only ejection — this handles initialization
+	// paths where the state has not yet populated scores. A non-empty slice
+	// whose length disagrees with NumValidators is a real state-consistency
+	// bug and is rejected.
+	var inactivityScores []uint64
+	if st.Version() >= version.Altair {
+		inactivityScores, err = st.InactivityScores()
+		if err != nil {
+			return nil, errors.Wrap(err, "could not read inactivity scores")
+		}
+		if len(inactivityScores) > 0 && len(inactivityScores) != st.NumValidators() {
+			return nil, errors.Errorf(
+				"inactivity scores length %d does not match validator count %d",
+				len(inactivityScores), st.NumValidators(),
+			)
+		}
+	}
+
 	// To avoid copying the state validator set via st.Validators(), we will perform a read only pass
 	// over the validator set while collecting validator indices where the validator copy is actually
 	// necessary, then we will process these operations.
@@ -68,7 +113,13 @@ func ProcessRegistryUpdates(ctx context.Context, st state.BeaconState) (state.Be
 		// Collect validators to eject.
 		isActive := helpers.IsActiveValidatorUsingTrie(val, currentEpoch)
 		belowEjectionBalance := val.EffectiveBalance() <= ejectionBal
-		if isActive && belowEjectionBalance {
+		// LightChain: also eject validators with persistent inactivity.
+		// Empty inactivityScores (Phase 0, or states that have not yet
+		// populated the field) skip this branch and behavior matches
+		// upstream. The length invariant has already been checked above,
+		// so idx is guaranteed in bounds whenever len > 0.
+		highInactivity := len(inactivityScores) > 0 && inactivityScores[idx] >= inactivityScoreEjectionThreshold
+		if isActive && (belowEjectionBalance || highInactivity) {
 			eligibleForEjection = append(eligibleForEjection, primitives.ValidatorIndex(idx))
 		}
 

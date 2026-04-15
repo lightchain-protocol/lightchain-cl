@@ -312,6 +312,79 @@ func TestProcessRegistryUpdates_CanExits(t *testing.T) {
 	}
 }
 
+// TestProcessRegistryUpdates_HighInactivityScoreEjected exercises the
+// LightChain inactivity-score ejection path. Validators whose score is at
+// or above the ejection threshold (256) are force-exited; validators just
+// below the threshold are left alone.
+//
+// This is the only in-repo test for the fixed-supply inactivity behavior;
+// the end-to-end property ("score=256 after N leak epochs") is covered by
+// the orchestrator's tests/e2e/inactivity_exit_test.sh.
+func TestProcessRegistryUpdates_HighInactivityScoreEjected(t *testing.T) {
+	// Three Altair validators, all active with full effective balance. Only
+	// validator 1 sits exactly on the ejection threshold.
+	base := &ethpb.BeaconStateAltair{
+		Slot: 0,
+		Validators: []*ethpb.Validator{
+			{ExitEpoch: params.BeaconConfig().FarFutureEpoch, EffectiveBalance: params.BeaconConfig().MaxEffectiveBalance},
+			{ExitEpoch: params.BeaconConfig().FarFutureEpoch, EffectiveBalance: params.BeaconConfig().MaxEffectiveBalance},
+			{ExitEpoch: params.BeaconConfig().FarFutureEpoch, EffectiveBalance: params.BeaconConfig().MaxEffectiveBalance},
+		},
+		Balances: []uint64{
+			params.BeaconConfig().MaxEffectiveBalance,
+			params.BeaconConfig().MaxEffectiveBalance,
+			params.BeaconConfig().MaxEffectiveBalance,
+		},
+		// Score 255 is one below the LightChain ejection threshold (256) and
+		// must NOT trigger an exit — this pins the boundary so future edits
+		// can't silently move the threshold.
+		InactivityScores:    []uint64{255, 256, 0},
+		FinalizedCheckpoint: &ethpb.Checkpoint{Root: make([]byte, fieldparams.RootLength)},
+	}
+	beaconState, err := state_native.InitializeFromProtoAltair(base)
+	require.NoError(t, err)
+
+	newState, err := epoch.ProcessRegistryUpdates(t.Context(), beaconState)
+	require.NoError(t, err)
+
+	farFuture := params.BeaconConfig().FarFutureEpoch
+	vals := newState.Validators()
+	require.Equal(t, 3, len(vals))
+
+	assert.Equal(t, farFuture, vals[0].ExitEpoch,
+		"validator 0 (score 255) must not be ejected — boundary below threshold")
+	assert.NotEqual(t, farFuture, vals[1].ExitEpoch,
+		"validator 1 (score 256) must be ejected at the threshold")
+	assert.Equal(t, farFuture, vals[2].ExitEpoch,
+		"validator 2 (score 0) must not be ejected")
+}
+
+// TestProcessRegistryUpdates_Phase0NoInactivityScores verifies that the
+// LightChain patch does not break Phase 0 state processing. Phase 0 beacon
+// states have no inactivity scores field, and calling st.InactivityScores()
+// on them returns an error. The patch must version-gate that read so the
+// Phase 0 spec-test suite continues to pass.
+func TestProcessRegistryUpdates_Phase0NoInactivityScores(t *testing.T) {
+	base := &ethpb.BeaconState{
+		Slot: 0,
+		Validators: []*ethpb.Validator{
+			{ExitEpoch: params.BeaconConfig().FarFutureEpoch, EffectiveBalance: params.BeaconConfig().MaxEffectiveBalance},
+		},
+		Balances:            []uint64{params.BeaconConfig().MaxEffectiveBalance},
+		FinalizedCheckpoint: &ethpb.Checkpoint{Root: make([]byte, fieldparams.RootLength)},
+	}
+	beaconState, err := state_native.InitializeFromProtoPhase0(base)
+	require.NoError(t, err)
+
+	newState, err := epoch.ProcessRegistryUpdates(t.Context(), beaconState)
+	require.NoError(t, err, "ProcessRegistryUpdates must not fail on Phase 0 states")
+
+	vals := newState.Validators()
+	require.Equal(t, 1, len(vals))
+	assert.Equal(t, params.BeaconConfig().FarFutureEpoch, vals[0].ExitEpoch,
+		"Phase 0 validator with full balance must not be ejected")
+}
+
 func buildState(t testing.TB, slot primitives.Slot, validatorCount uint64) state.BeaconState {
 	validators := make([]*ethpb.Validator, validatorCount)
 	for i := range validators {
