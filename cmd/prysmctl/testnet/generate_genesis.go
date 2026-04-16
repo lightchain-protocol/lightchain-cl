@@ -13,8 +13,10 @@ import (
 	"github.com/OffchainLabs/prysm/v7/beacon-chain/state"
 	"github.com/OffchainLabs/prysm/v7/cmd/flags"
 	"github.com/OffchainLabs/prysm/v7/config/params"
+	"github.com/OffchainLabs/prysm/v7/consensus-types/blocks"
 	"github.com/OffchainLabs/prysm/v7/container/trie"
 	"github.com/OffchainLabs/prysm/v7/io/file"
+	enginev1 "github.com/OffchainLabs/prysm/v7/proto/engine/v1"
 	ethpb "github.com/OffchainLabs/prysm/v7/proto/prysm/v1alpha1"
 	"github.com/OffchainLabs/prysm/v7/runtime/interop"
 	"github.com/OffchainLabs/prysm/v7/runtime/version"
@@ -359,6 +361,30 @@ func generateGenesis(ctx context.Context) (state.BeaconState, error) {
 		}
 		if err := genesisState.SetEth1DepositIndex(0); err != nil {
 			return nil, err
+		}
+		// Also patch the ExecutionPayloadHeader.BlockHash to match geth's actual
+		// genesis block hash. Without this, the beacon sends forkchoice updates
+		// with the wrong hash and geth responds with SYNCING.
+		eph, err := genesisState.LatestExecutionPayloadHeader()
+		if err != nil {
+			return nil, errors.Wrap(err, "could not get latest execution payload header")
+		}
+		ephProto := eph.Proto()
+		switch h := ephProto.(type) {
+		case *enginev1.ExecutionPayloadHeaderDeneb:
+			h.BlockHash = header.Hash().Bytes()
+			h.ParentHash = header.ParentHash.Bytes()
+			h.StateRoot = header.Root.Bytes()
+			h.ReceiptsRoot = header.ReceiptHash.Bytes()
+			wrapped, wErr := blocks.WrappedExecutionPayloadHeaderDeneb(h)
+			if wErr != nil {
+				return nil, wErr
+			}
+			if err := genesisState.SetLatestExecutionPayloadHeader(wrapped); err != nil {
+				return nil, err
+			}
+		default:
+			log.Printf("WARN: --override-eth1data does not patch ExecutionPayloadHeader for fork %T", h)
 		}
 	}
 
