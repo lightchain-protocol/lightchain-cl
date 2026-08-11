@@ -41,7 +41,20 @@ import (
 // finalizing (i.e. its absence does not itself cause a leak) will not
 // accumulate score and therefore will not be ejected via this path — see
 // docs/concerns.md in the orchestrator repo for the intentional trade-off.
-const inactivityScoreEjectionThreshold uint64 = 256
+//
+// EMERGENCY PATCH 2026-08-11: threshold raised to effectively disable
+// ejection. The original value of 256 was derived from Ethereum-mainnet
+// epoch timing (~6.8h of leak), but LightChain mainnet runs 2s slots with
+// 6 slots/epoch, making 64 leak epochs ≈ 13 MINUTES. On 2026-08-11 a
+// ~90-minute chain halt drove every validator's score past 256 and the
+// entire validator set was force-exited, permanently halting the chain
+// (empty active set → no proposer computable). Recovery required a
+// coordinated re-sync from the last pre-ejection finalized checkpoint
+// under this patched rule. A chain-wide outage MUST NOT be able to eject
+// the whole set; any future re-enable needs a floor guard (never eject
+// below quorum) and a threshold derived from THIS chain's SECONDS_PER_SLOT
+// and SLOTS_PER_EPOCH.
+const inactivityScoreEjectionThreshold uint64 = 1 << 62
 
 // ProcessRegistryUpdates rotates validators in and out of active pool.
 // the amount to rotate is determined churn limit.
