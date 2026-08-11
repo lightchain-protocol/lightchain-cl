@@ -314,18 +314,23 @@ func TestProcessRegistryUpdates_CanExits(t *testing.T) {
 
 // TestProcessRegistryUpdates_HighInactivityScoreEjected exercises the
 // LightChain inactivity-score ejection path. Validators whose score is at
-// or above the ejection threshold (256) are force-exited; validators just
-// below the threshold are left alone.
-//
-// This is the only in-repo test for the fixed-supply inactivity behavior;
-// the end-to-end property ("score=256 after N leak epochs") is covered by
-// the orchestrator's tests/e2e/inactivity_exit_test.sh.
+// or above the ejection threshold are force-exited; validators just below
+// the threshold are left alone. The threshold is derived at runtime from
+// the chain's slot/epoch timing (see InactivityEjectionThreshold) so it
+// corresponds to the same wall-clock downtime on every chain config.
 func TestProcessRegistryUpdates_HighInactivityScoreEjected(t *testing.T) {
-	// Three Altair validators, all active with full effective balance. Only
-	// validator 1 sits exactly on the ejection threshold.
+	threshold := epoch.InactivityEjectionThreshold()
+	require.Equal(t, true, threshold > 0 && threshold < (1<<62),
+		"derived threshold must be a sane finite value")
+
+	// Four Altair validators, all active with full effective balance. Only
+	// validator 1 sits exactly on the ejection threshold. Validator 3 keeps
+	// the active set large enough that the quorum floor (2/3) permits one
+	// ejection.
 	base := &ethpb.BeaconStateAltair{
 		Slot: 0,
 		Validators: []*ethpb.Validator{
+			{ExitEpoch: params.BeaconConfig().FarFutureEpoch, EffectiveBalance: params.BeaconConfig().MaxEffectiveBalance},
 			{ExitEpoch: params.BeaconConfig().FarFutureEpoch, EffectiveBalance: params.BeaconConfig().MaxEffectiveBalance},
 			{ExitEpoch: params.BeaconConfig().FarFutureEpoch, EffectiveBalance: params.BeaconConfig().MaxEffectiveBalance},
 			{ExitEpoch: params.BeaconConfig().FarFutureEpoch, EffectiveBalance: params.BeaconConfig().MaxEffectiveBalance},
@@ -334,11 +339,11 @@ func TestProcessRegistryUpdates_HighInactivityScoreEjected(t *testing.T) {
 			params.BeaconConfig().MaxEffectiveBalance,
 			params.BeaconConfig().MaxEffectiveBalance,
 			params.BeaconConfig().MaxEffectiveBalance,
+			params.BeaconConfig().MaxEffectiveBalance,
 		},
-		// Score 255 is one below the LightChain ejection threshold (256) and
-		// must NOT trigger an exit — this pins the boundary so future edits
-		// can't silently move the threshold.
-		InactivityScores:    []uint64{255, 256, 0},
+		// threshold-1 must NOT trigger an exit — this pins the boundary so
+		// future edits can't silently move it.
+		InactivityScores:    []uint64{threshold - 1, threshold, 0, 0},
 		FinalizedCheckpoint: &ethpb.Checkpoint{Root: make([]byte, fieldparams.RootLength)},
 	}
 	beaconState, err := state_native.InitializeFromProtoAltair(base)
@@ -349,14 +354,65 @@ func TestProcessRegistryUpdates_HighInactivityScoreEjected(t *testing.T) {
 
 	farFuture := params.BeaconConfig().FarFutureEpoch
 	vals := newState.Validators()
-	require.Equal(t, 3, len(vals))
+	require.Equal(t, 4, len(vals))
 
 	assert.Equal(t, farFuture, vals[0].ExitEpoch,
-		"validator 0 (score 255) must not be ejected — boundary below threshold")
+		"validator 0 (score threshold-1) must not be ejected — boundary below threshold")
 	assert.NotEqual(t, farFuture, vals[1].ExitEpoch,
-		"validator 1 (score 256) must be ejected at the threshold")
+		"validator 1 (score at threshold) must be ejected")
 	assert.Equal(t, farFuture, vals[2].ExitEpoch,
 		"validator 2 (score 0) must not be ejected")
+	assert.Equal(t, farFuture, vals[3].ExitEpoch,
+		"validator 3 (score 0) must not be ejected")
+}
+
+// TestProcessRegistryUpdates_InactivityEjectionQuorumFloor pins the
+// LightChain quorum floor: when every validator's inactivity score crosses
+// the threshold at once (the chain-wide-outage signature of the 2026-08-11
+// mainnet incident), ejections must stop before the active set drops below
+// 2/3 of its size. With 6 active validators, floor = 4, so exactly 2 (the
+// lowest indices) are ejected and 4 must remain active.
+func TestProcessRegistryUpdates_InactivityEjectionQuorumFloor(t *testing.T) {
+	threshold := epoch.InactivityEjectionThreshold()
+	n := 6
+	validators := make([]*ethpb.Validator, n)
+	balances := make([]uint64, n)
+	scores := make([]uint64, n)
+	for i := 0; i < n; i++ {
+		validators[i] = &ethpb.Validator{
+			ExitEpoch:        params.BeaconConfig().FarFutureEpoch,
+			EffectiveBalance: params.BeaconConfig().MaxEffectiveBalance,
+		}
+		balances[i] = params.BeaconConfig().MaxEffectiveBalance
+		scores[i] = threshold + 100
+	}
+	base := &ethpb.BeaconStateAltair{
+		Slot:                0,
+		Validators:          validators,
+		Balances:            balances,
+		InactivityScores:    scores,
+		FinalizedCheckpoint: &ethpb.Checkpoint{Root: make([]byte, fieldparams.RootLength)},
+	}
+	beaconState, err := state_native.InitializeFromProtoAltair(base)
+	require.NoError(t, err)
+
+	newState, err := epoch.ProcessRegistryUpdates(t.Context(), beaconState)
+	require.NoError(t, err)
+
+	farFuture := params.BeaconConfig().FarFutureEpoch
+	vals := newState.Validators()
+	require.Equal(t, n, len(vals))
+
+	ejected := 0
+	for i, v := range vals {
+		if v.ExitEpoch != farFuture {
+			ejected++
+			assert.Equal(t, true, i < 2,
+				"only the lowest-index candidates may be ejected (deterministic cap order)")
+		}
+	}
+	assert.Equal(t, 2, ejected,
+		"exactly activeCount-floor validators may be ejected; the quorum floor must hold")
 }
 
 // TestProcessRegistryUpdates_Phase0NoInactivityScores verifies that the

@@ -23,25 +23,42 @@ import (
 	"github.com/pkg/errors"
 )
 
-// inactivityScoreEjectionThreshold is the LightChain persistent-inactivity
-// ejection threshold. Validators whose inactivity score reaches this value
-// are force-exited (instead of having their stake burned via the inactivity
-// penalty, which is skipped on this fork to preserve the fixed-supply
-// invariant).
+// inactivityEjectionMinDowntimeSeconds is the minimum wall-clock duration of
+// continuous inactivity-leak participation failure before a validator becomes
+// eligible for LightChain's forced exit (which replaces the inactivity
+// penalty on this fork to preserve the fixed-supply invariant).
 //
-// With INACTIVITY_SCORE_BIAS=4 (mainnet default), score grows by 4 per
-// missed-target epoch while the chain is in inactivity leak, and recovers
-// by min(16, score) per healthy epoch once the chain finalizes again. A
-// score of 256 corresponds to ~64 consecutive leak epochs (≈6.8 hours on
-// mainnet, ≈12 minutes on the LightChain devnet) of continuous offline
-// behavior. Honest validators that briefly miss an attestation never reach
-// this threshold because the recovery rate outpaces the bias outside leak.
-//
-// Caveat: a validator that is permanently offline while the chain keeps
-// finalizing (i.e. its absence does not itself cause a leak) will not
-// accumulate score and therefore will not be ejected via this path — see
-// docs/concerns.md in the orchestrator repo for the intentional trade-off.
-const inactivityScoreEjectionThreshold uint64 = 256
+// The score threshold is derived from this duration at runtime via
+// InactivityEjectionThreshold, using the active chain config's
+// SECONDS_PER_SLOT, SLOTS_PER_EPOCH, and INACTIVITY_SCORE_BIAS. The original
+// implementation hardcoded 256, a value computed from Ethereum-mainnet epoch
+// timing (~6.8h of leak) — but on LightChain's 2s-slot / 6-slot-epoch chains
+// 256 was reached after ~13 minutes of non-finality. On 2026-08-11 a
+// ~90-minute mainnet halt force-exited the entire validator set, permanently
+// halting the chain (empty active set → no proposer computable); recovery
+// required a coordinated replay from the last pre-ejection finalized
+// checkpoint. Deriving from wall-clock time makes the threshold mean the
+// same thing on every chain this fork runs.
+const inactivityEjectionMinDowntimeSeconds uint64 = 6 * 60 * 60 // 6 hours
+
+// InactivityEjectionThreshold returns the inactivity score at or above which
+// a validator becomes a candidate for forced exit, derived from the active
+// beacon config so the threshold corresponds to
+// inactivityEjectionMinDowntimeSeconds of continuous leak on this chain.
+// Exported for tests and operator tooling.
+func InactivityEjectionThreshold() uint64 {
+	cfg := params.BeaconConfig()
+	epochSeconds := cfg.SecondsPerSlot * uint64(cfg.SlotsPerEpoch)
+	if epochSeconds == 0 || cfg.InactivityScoreBias == 0 {
+		// Misconfigured chain params: fail safe by never ejecting.
+		return ^uint64(0)
+	}
+	leakEpochs := inactivityEjectionMinDowntimeSeconds / epochSeconds
+	if leakEpochs == 0 {
+		leakEpochs = 1
+	}
+	return leakEpochs * cfg.InactivityScoreBias
+}
 
 // ProcessRegistryUpdates rotates validators in and out of active pool.
 // the amount to rotate is determined churn limit.
@@ -103,6 +120,11 @@ func ProcessRegistryUpdates(ctx context.Context, st state.BeaconState) (state.Be
 	eligibleForActivationQ := make([]primitives.ValidatorIndex, 0)
 	eligibleForActivation := make([]primitives.ValidatorIndex, 0)
 	eligibleForEjection := make([]primitives.ValidatorIndex, 0)
+	// LightChain: inactivity-based ejection candidates are collected separately
+	// from spec (balance) ejections so a quorum floor can cap them below.
+	inactivityCandidates := make([]primitives.ValidatorIndex, 0)
+	activeCount := 0
+	inactivityThreshold := InactivityEjectionThreshold()
 
 	if err := st.ReadFromEveryValidator(func(idx int, val state.ReadOnlyValidator) error {
 		// Collect validators eligible to enter the activation queue.
@@ -112,15 +134,20 @@ func ProcessRegistryUpdates(ctx context.Context, st state.BeaconState) (state.Be
 
 		// Collect validators to eject.
 		isActive := helpers.IsActiveValidatorUsingTrie(val, currentEpoch)
+		if isActive {
+			activeCount++
+		}
 		belowEjectionBalance := val.EffectiveBalance() <= ejectionBal
 		// LightChain: also eject validators with persistent inactivity.
 		// Empty inactivityScores (Phase 0, or states that have not yet
 		// populated the field) skip this branch and behavior matches
 		// upstream. The length invariant has already been checked above,
 		// so idx is guaranteed in bounds whenever len > 0.
-		highInactivity := len(inactivityScores) > 0 && inactivityScores[idx] >= inactivityScoreEjectionThreshold
-		if isActive && (belowEjectionBalance || highInactivity) {
+		highInactivity := len(inactivityScores) > 0 && inactivityScores[idx] >= inactivityThreshold
+		if isActive && belowEjectionBalance {
 			eligibleForEjection = append(eligibleForEjection, primitives.ValidatorIndex(idx))
+		} else if isActive && highInactivity {
+			inactivityCandidates = append(inactivityCandidates, primitives.ValidatorIndex(idx))
 		}
 
 		// Collect validators eligible for activation and not yet dequeued for activation.
@@ -131,6 +158,29 @@ func ProcessRegistryUpdates(ctx context.Context, st state.BeaconState) (state.Be
 		return nil
 	}); err != nil {
 		return st, fmt.Errorf("failed to read validators: %w", err)
+	}
+
+	// LightChain quorum floor: inactivity ejections may never shrink the
+	// active set below 2/3 of its current size (minimum 1). During a
+	// chain-wide outage every validator's score rises together; without this
+	// cap a single long halt force-exits the entire set and permanently
+	// bricks the chain (2026-08-11 mainnet incident). Candidates are capped
+	// in ascending validator-index order, which is deterministic across
+	// nodes; spec (balance) ejections are mandatory and count against the
+	// remaining capacity but are never themselves capped.
+	if len(inactivityCandidates) > 0 {
+		floor := (2 * activeCount) / 3
+		if floor < 1 {
+			floor = 1
+		}
+		capacity := activeCount - len(eligibleForEjection) - floor
+		if capacity < 0 {
+			capacity = 0
+		}
+		if len(inactivityCandidates) > capacity {
+			inactivityCandidates = inactivityCandidates[:capacity]
+		}
+		eligibleForEjection = append(eligibleForEjection, inactivityCandidates...)
 	}
 
 	// Process validators for activation eligibility.
