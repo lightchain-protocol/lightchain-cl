@@ -1,0 +1,85 @@
+name: CI
+
+# Baseline CI (tracked issue #2: "repo currently has no workflows").
+#
+# Upstream Prysm's GitHub Actions workflows were intentionally removed
+# (8437139b3) because this fork's CI runs on Buildkite instead - but the
+# Buildkite pipeline is configured in the Buildkite dashboard, not
+# committed to this repo, so it gives no automated feedback on PRs from
+# outside the org, and nothing here re-runs it publicly. The 2026-08-11
+# incident and the fix that followed both touched
+# beacon-chain/core/epoch/epoch_processing.go with no CI gate in between.
+#
+# Scope, deliberately narrow to start:
+#   - gofmt / build sanity across the whole module (fast, catches the
+#     easy stuff on every PR).
+#   - bazel test on the LightChain-specific consensus packages this fork
+#     has actually patched (core/epoch, core/altair), so the exact area
+#     that caused the incident is covered from day one.
+#
+# Not attempted here: full `bazel test //...`. This is a large fork of
+# Prysm with a correspondingly large test suite; running all of it on
+# every PR belongs in a follow-up once runner time/caching strategy has
+# been worked out (self-hosted runners or a remote cache), rather than
+# guessed at in this patch. Consider a nightly/scheduled full-suite job
+# as the next step.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gofmt:
+    name: gofmt check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l $(find . -name '*.go' -not -path './third_party/*'))
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+  bazel-build-and-test:
+    name: bazel build & test (consensus-critical packages)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bazelisk
+        uses: bazelbuild/setup-bazelisk@v3
+
+      - name: Cache Bazel
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel
+          key: bazel-${{ runner.os }}-${{ hashFiles('MODULE.bazel.lock', 'go.sum') }}
+          restore-keys: |
+            bazel-${{ runner.os }}-
+
+      # Build the packages LightChain has actually modified, plus their
+      # direct dependents, as a smoke test that the tree still compiles.
+      - name: bazel build (epoch + altair core packages)
+        run: >
+          bazel build
+          //beacon-chain/core/epoch/...
+          //beacon-chain/core/altair/...
+
+      # Run the consensus-rule tests directly - this is the package that
+      # produced the 2026-08-11 incident and the anchored-floor fix.
+      - name: bazel test (epoch + altair core packages)
+        run: >
+          bazel test
+          //beacon-chain/core/epoch/...
+          //beacon-chain/core/altair/...
+          --test_output=errors
