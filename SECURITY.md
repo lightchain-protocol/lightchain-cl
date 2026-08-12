@@ -1,13 +1,12 @@
 # Security Policy
 
-> **TODO before merging:** the contact address, PGP fingerprints, and
-> `.well-known/security.txt` below are placeholders. `.well-known/security.txt`
-> in this repo is still Offchain Labs' own PGP-signed file (signed with their
-> key) — it can't simply be edited, since a valid `security.txt` must be
-> signed by the key it names. LightChain's security contact needs to
-> generate and sign a replacement with their own key before this policy is
-> accurate. Until that lands, a report about a LightChain-specific bug
-> (like the 2026-08-11 consensus incident) has no correct place to go.
+> **TODO before merging:** the contact email below is now real
+> (team@lightchain.ai). The PGP fingerprints and
+> `.well-known/security.txt` are still placeholders — that file
+> can't simply be edited, since a valid `security.txt` must be
+> signed by the key it names. LightChain's security contact needs
+> to generate and sign a replacement with their own key before
+> the encryption piece of this policy is accurate.
 
 ## Supported Versions
 
@@ -20,9 +19,8 @@ logic in `beacon-chain/core/epoch/`) are only fixed in this repo.
 
 ## Reporting a Vulnerability
 
-Please email **TODO: security@lightchain.example** (replace with the real
-LightChain security contact) with details of the vulnerability. See our
-signed [security.txt](./.well-known/security.txt) for the preferred
+Please email **team@lightchain.ai** with details of the vulnerability. See
+our signed [security.txt](./.well-known/security.txt) for the preferred
 encryption key once it has been regenerated with LightChain's own PGP key.
 
 **Please do not file a public GitHub issue** mentioning the vulnerability,
