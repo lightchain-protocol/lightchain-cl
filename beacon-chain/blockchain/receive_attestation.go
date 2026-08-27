@@ -89,7 +89,17 @@ func (s *Service) spawnProcessAttestationsRoutine() {
 			return
 		}
 
-		reorgInterval := time.Second*time.Duration(params.BeaconConfig().SecondsPerSlot) - reorgLateBlockCountAttestations
+		// Adjust the late-block window for networks with a slot shorter than the
+		// fixed reorgLateBlockCountAttestations constant, mirroring the same
+		// adaptation in operations/attestations/prepare_forkchoice.go. Without
+		// this the offset goes negative at sub-2s slots and
+		// NewSlotTickerWithIntervals panics with "invalid decreasing offsets".
+		slotDuration := params.BeaconConfig().SlotDuration()
+		lateCount := reorgLateBlockCountAttestations
+		for lateCount >= slotDuration {
+			lateCount /= 2
+		}
+		reorgInterval := slotDuration - lateCount
 		ticker := slots.NewSlotTickerWithIntervals(s.genesisTime, []time.Duration{0, reorgInterval})
 		for {
 			select {

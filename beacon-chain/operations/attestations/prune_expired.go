@@ -98,7 +98,14 @@ func (s *Service) expired(providedSlot primitives.Slot) bool {
 // Handles expiration of attestations before deneb.
 func (s *Service) expiredPreDeneb(slot primitives.Slot) bool {
 	expirationSlot := slot + params.BeaconConfig().SlotsPerEpoch
-	expirationTime := s.genesisTime.Add(time.Duration(expirationSlot.Mul(params.BeaconConfig().SecondsPerSlot)) * time.Second)
+	// Derive the slot's start from the schedule rather than multiplying by a
+	// single slot duration, which would be wrong on a chain that has crossed a
+	// scheduled slot-time boundary.
+	expirationTime, err := slots.StartTime(s.genesisTime, expirationSlot)
+	if err != nil {
+		// An un-representable expiry is far in the future, so nothing is expired.
+		return false
+	}
 	return expirationTime.Before(time.Now())
 }
 
