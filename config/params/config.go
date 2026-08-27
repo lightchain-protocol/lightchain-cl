@@ -68,6 +68,16 @@ type BeaconChainConfig struct {
 	MinAttestationInclusionDelay     primitives.Slot  `yaml:"MIN_ATTESTATION_INCLUSION_DELAY" spec:"true"` // MinAttestationInclusionDelay defines how many slots validator has to wait to include attestation for beacon block.
 	SecondsPerSlot                   uint64           `yaml:"SECONDS_PER_SLOT" spec:"true"`                // SecondsPerSlot is how many seconds are in a single slot.
 	SlotDurationMilliseconds         uint64           `yaml:"SLOT_DURATION_MS" spec:"true"`                // SlotDurationMilliseconds is the slot time expressed in milliseconds.
+	// LightChain: scheduled slot-time changes. Slot number is derived from
+	// elapsed time since genesis, so altering the slot duration outright would
+	// reinterpret the whole chain history. These fields instead anchor a new
+	// duration at a future slot, making the slot<->time mapping piecewise and
+	// leaving every slot before the boundary untouched. A zero StartSlot
+	// disables the entry. See time/slots.SlotTimeSchedule.
+	SlotTimeForkOneSlot              uint64           `yaml:"SLOT_TIME_FORK_ONE_SLOT" spec:"true"`         // SlotTimeForkOneSlot is the first slot governed by SlotTimeForkOneMillis.
+	SlotTimeForkOneMillis            uint64           `yaml:"SLOT_TIME_FORK_ONE_MS" spec:"true"`           // SlotTimeForkOneMillis is the slot duration from SlotTimeForkOneSlot onward.
+	SlotTimeForkTwoSlot              uint64           `yaml:"SLOT_TIME_FORK_TWO_SLOT" spec:"true"`         // SlotTimeForkTwoSlot is the first slot governed by SlotTimeForkTwoMillis.
+	SlotTimeForkTwoMillis            uint64           `yaml:"SLOT_TIME_FORK_TWO_MS" spec:"true"`           // SlotTimeForkTwoMillis is the slot duration from SlotTimeForkTwoSlot onward.
 	SlotsPerEpoch                    primitives.Slot  `yaml:"SLOTS_PER_EPOCH" spec:"true"`                 // SlotsPerEpoch is the number of slots in an epoch.
 	SqrRootSlotsPerEpoch             primitives.Slot  // SqrRootSlotsPerEpoch is a hard coded value where we take the square root of `SlotsPerEpoch` and round down.
 	MinSeedLookahead                 primitives.Epoch `yaml:"MIN_SEED_LOOKAHEAD" spec:"true"`                  // MinSeedLookahead is the duration of randao look ahead seed.
@@ -783,4 +793,39 @@ func (b *BeaconChainConfig) SlotDurationMillis() uint64 {
 func (b *BeaconChainConfig) SlotComponentDuration(bp primitives.BP) time.Duration {
 	ms := uint64(bp) * b.SlotDurationMillis() / uint64(BasisPoints)
 	return time.Duration(ms) * time.Millisecond
+}
+
+// SlotTimeSegment is one entry of the slot-duration schedule: every slot from
+// StartSlot up to the next segment's StartSlot lasts DurationMillis.
+type SlotTimeSegment struct {
+	StartSlot     uint64
+	DurationMillis uint64
+}
+
+// SlotTimeSchedule returns the chain's slot-duration schedule in ascending slot
+// order, always beginning with the genesis segment at slot 0. Entries with a
+// zero StartSlot or zero duration are ignored, so a chain with no scheduled
+// change yields a single segment and the uniform behaviour of a stock client.
+//
+// Callers must treat this as authoritative for converting between slots and
+// wall-clock time; using SlotDuration() alone is only correct for chains that
+// have never scheduled a change.
+func (b *BeaconChainConfig) SlotTimeSchedule() []SlotTimeSegment {
+	segments := []SlotTimeSegment{{StartSlot: 0, DurationMillis: b.SlotDurationMillis()}}
+	for _, s := range []SlotTimeSegment{
+		{StartSlot: b.SlotTimeForkOneSlot, DurationMillis: b.SlotTimeForkOneMillis},
+		{StartSlot: b.SlotTimeForkTwoSlot, DurationMillis: b.SlotTimeForkTwoMillis},
+	} {
+		if s.StartSlot == 0 || s.DurationMillis == 0 {
+			continue
+		}
+		// Keep ascending and reject a boundary that would collide with or
+		// precede one already scheduled — an out-of-order schedule would make
+		// the slot<->time mapping non-monotonic.
+		if s.StartSlot <= segments[len(segments)-1].StartSlot {
+			continue
+		}
+		segments = append(segments, s)
+	}
+	return segments
 }

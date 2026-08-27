@@ -115,6 +115,12 @@ func (s *SlotTicker) start(
 	after func(time.Duration) <-chan time.Time) {
 	d := time.Duration(secondsPerSlot) * time.Second
 
+	// Only chains that have scheduled a slot-time change need the piecewise
+	// path. Everything else keeps the original fixed-interval arithmetic, which
+	// also preserves the caller-supplied secondsPerSlot when it deliberately
+	// differs from the global config (as some tests do).
+	scheduled := len(params.BeaconConfig().SlotTimeSchedule()) > 1
+
 	go func() {
 		sinceGenesis := since(genesisTime)
 
@@ -124,6 +130,14 @@ func (s *SlotTicker) start(
 			// Handle when the current time is before the genesis time.
 			nextTickTime = genesisTime
 			slot = 0
+		} else if scheduled {
+			slot = At(genesisTime, genesisTime.Add(sinceGenesis)) + 1
+			t, err := StartTime(genesisTime, slot)
+			if err != nil {
+				log.WithError(err).Error("Could not compute slot start time; slot ticker stopping")
+				return
+			}
+			nextTickTime = t
 		} else {
 			nextTick := sinceGenesis.Truncate(d) + d
 			nextTickTime = genesisTime.Add(nextTick)
@@ -136,7 +150,18 @@ func (s *SlotTicker) start(
 			case <-after(waitTime):
 				s.c <- slot
 				slot++
-				nextTickTime = nextTickTime.Add(d)
+				if scheduled {
+					// Recompute rather than adding a constant: the interval
+					// changes at the boundary, and StartTime accounts for it.
+					t, err := StartTime(genesisTime, slot)
+					if err != nil {
+						log.WithError(err).Error("Could not compute slot start time; slot ticker stopping")
+						return
+					}
+					nextTickTime = t
+				} else {
+					nextTickTime = nextTickTime.Add(d)
+				}
 			case <-s.done:
 				return
 			}

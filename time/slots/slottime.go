@@ -178,14 +178,58 @@ func VerifyTime(genesis time.Time, slot primitives.Slot, timeTolerance time.Dura
 	return nil
 }
 
+// ── piecewise slot timing ───────────────────────────────────────────────────
+//
+// A chain may schedule slot-duration changes (see BeaconChainConfig
+// .SlotTimeSchedule). The slot<->time mapping is therefore piecewise linear:
+// each segment contributes its own slot length, and slots before a boundary
+// keep the timing they were produced under. With no scheduled change the
+// schedule holds a single segment and every function below reduces exactly to
+// the uniform arithmetic a stock client performs.
+
+// segmentOffsets returns, for each schedule segment, the wall-clock offset from
+// genesis at which that segment begins.
+func segmentOffsets() ([]params.SlotTimeSegment, []time.Duration) {
+	segments := params.BeaconConfig().SlotTimeSchedule()
+	offsets := make([]time.Duration, len(segments))
+	for i := 1; i < len(segments); i++ {
+		prev := segments[i-1]
+		span := segments[i].StartSlot - prev.StartSlot
+		offsets[i] = offsets[i-1] + time.Duration(span)*time.Duration(prev.DurationMillis)*time.Millisecond
+	}
+	return segments, offsets
+}
+
+// SlotDurationAt returns the configured duration of the given slot.
+func SlotDurationAt(slot primitives.Slot) time.Duration {
+	segments := params.BeaconConfig().SlotTimeSchedule()
+	d := time.Duration(segments[0].DurationMillis) * time.Millisecond
+	for _, s := range segments {
+		if uint64(slot) >= s.StartSlot {
+			d = time.Duration(s.DurationMillis) * time.Millisecond
+		}
+	}
+	return d
+}
+
 // StartTime takes the given slot and genesis time to determine the start time of the slot.
 // This method returns an error if the product of the slot duration * slot overflows int64.
 func StartTime(genesis time.Time, slot primitives.Slot) (time.Time, error) {
-	ms, err := slot.SafeMul(params.BeaconConfig().SlotDurationMillis())
+	segments, offsets := segmentOffsets()
+	// Locate the segment containing the slot, then advance from that segment's
+	// start rather than multiplying through from genesis.
+	idx := 0
+	for i, s := range segments {
+		if uint64(slot) >= s.StartSlot {
+			idx = i
+		}
+	}
+	within := uint64(slot) - segments[idx].StartSlot
+	ms, err := primitives.Slot(within).SafeMul(segments[idx].DurationMillis)
 	if err != nil {
 		return time.Unix(0, 0), fmt.Errorf("slot (%d) is in the far distant future: %w", slot, err)
 	}
-	return genesis.Add(time.Duration(ms) * time.Millisecond), nil
+	return genesis.Add(offsets[idx] + time.Duration(ms)*time.Millisecond), nil
 }
 
 // CurrentSlot returns the current slot as determined by the local clock and
@@ -199,15 +243,29 @@ func At(genesis, tm time.Time) primitives.Slot {
 	if tm.Before(genesis) {
 		return 0
 	}
-	return primitives.Slot(tm.Sub(genesis) / params.BeaconConfig().SlotDuration())
+	elapsed := tm.Sub(genesis)
+	segments, offsets := segmentOffsets()
+	// Walk to the last segment that had already begun at the given instant.
+	idx := 0
+	for i := range segments {
+		if elapsed >= offsets[i] {
+			idx = i
+		}
+	}
+	d := time.Duration(segments[idx].DurationMillis) * time.Millisecond
+	return primitives.Slot(segments[idx].StartSlot) + primitives.Slot((elapsed-offsets[idx])/d)
 }
 
 // Duration computes the span of time between two instants, represented as Slots.
+// Its sole caller (beacon-chain/startup.Clock.CurrentSlot) passes the genesis
+// time as `start`, so this is the slot at `end` and must honour the same
+// piecewise schedule — computing it with a single fixed slot length would
+// disagree with At across a scheduled boundary.
 func Duration(start, end time.Time) primitives.Slot {
 	if end.Before(start) {
 		return 0
 	}
-	return primitives.Slot((end.Sub(start)) / params.BeaconConfig().SlotDuration())
+	return At(start, end)
 }
 
 // ValidateClock validates a provided slot against the local
@@ -272,7 +330,13 @@ func SyncCommitteePeriodStartEpoch(e primitives.Epoch) (primitives.Epoch, error)
 // given slot start time. This method returns an error if the timestamp happens
 // before the given slot start time.
 func SinceSlotStart(s primitives.Slot, genesis time.Time, timestamp time.Time) (time.Duration, error) {
-	limit := genesis.Add(time.Duration(uint64(s)) * params.BeaconConfig().SlotDuration())
+	// Must go through StartTime: multiplying by a single slot duration disagrees
+	// with At() on any chain that has crossed a scheduled slot-time boundary,
+	// which makes forkchoice reject the current slot as being in the future.
+	limit, err := StartTime(genesis, s)
+	if err != nil {
+		return 0, err
+	}
 	if timestamp.Before(limit) {
 		return 0, fmt.Errorf("could not compute seconds since slot %d start: invalid timestamp, got %s < want %s", s, timestamp, limit)
 	}
