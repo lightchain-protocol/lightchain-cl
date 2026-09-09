@@ -1,0 +1,117 @@
+# Versioned node release: builds the linux/amd64 Prysm image external validators
+# install, smoke-tests it, and pushes it to GHCR. One image carries beacon-chain,
+# validator and prysmctl (see Dockerfile).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to build (e.g. v7.1.2-lc.1)"
+        required: true
+
+env:
+  IMAGE: ghcr.io/lightchain-protocol/prysm
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - id: vars
+        run: |
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build first without pushing so the smoke test runs against the exact
+      # image the push step then uploads (the second build is a cache hit).
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE }}:${{ steps.vars.outputs.tag }}
+          build-args: |
+            VCS_REF=${{ steps.vars.outputs.commit }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke
+        env:
+          REF: ${{ env.IMAGE }}:${{ steps.vars.outputs.tag }}
+        run: |
+          docker run --rm "$REF" beacon-chain --version
+
+          # The strict YAML loader only *logs* unknown config fields, so a run
+          # that exits 0 is not enough — the parse-issue line must be absent too,
+          # otherwise a build that lost the fork-specific keys would still pass.
+          docker run --rm -v "$PWD/.github:/smoke:ro" "$REF" \
+            prysmctl testnet generate-genesis \
+              --chain-config-file=/smoke/smoke-config.yml \
+              --num-validators=4 --fork=electra \
+              --output-ssz=/tmp/genesis.ssz 2>&1 | tee "$RUNNER_TEMP/smoke.log"
+          grep -q 'Done writing genesis state' "$RUNNER_TEMP/smoke.log"
+          ! grep -q 'issues parsing the config' "$RUNNER_TEMP/smoke.log"
+
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.vars.outputs.tag }}
+            ${{ env.IMAGE }}:${{ steps.vars.outputs.sha }}
+          build-args: |
+            VCS_REF=${{ steps.vars.outputs.commit }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Manifest
+        env:
+          TAG: ${{ steps.vars.outputs.tag }}
+          SHA_TAG: ${{ steps.vars.outputs.sha }}
+          COMMIT: ${{ steps.vars.outputs.commit }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          jq -n '{component:"cl", image:$image, tag:$tag, sha_tag:$sha, commit:$commit,
+                  digest:$digest, platform:"linux/amd64", built_at:(now|todate)}' \
+            --arg image "$IMAGE" --arg tag "$TAG" --arg sha "$SHA_TAG" \
+            --arg commit "$COMMIT" --arg digest "$DIGEST" > release-manifest.json
+          cat release-manifest.json
+          {
+            echo "### prysm \`$TAG\`"
+            echo
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| image | \`$IMAGE:$TAG\` |"
+            echo "| also tagged | \`$SHA_TAG\` |"
+            echo "| digest | \`$DIGEST\` |"
+            echo "| commit | \`$COMMIT\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest-cl-${{ steps.vars.outputs.tag }}
+          path: release-manifest.json
