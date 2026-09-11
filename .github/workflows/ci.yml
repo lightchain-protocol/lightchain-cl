@@ -1,0 +1,51 @@
+name: CI
+
+# Baseline CI (closes #2: "repo currently has no workflows").
+#
+# Scope matches the "Proposed scope (minimal first PR)" in issue #2:
+# a single go.yml that runs `go build ./...` and `go test` on the three
+# packages this fork actually modifies, so a push that breaks the build
+# or fails tests doesn't go undetected until someone runs it locally.
+# Deliberately not porting upstream's fuzz.yml, clang-format.yml,
+# horusec.yaml, check-specrefs.yml, or check-logs.yml in this first pass —
+# those depend on external services and configuration this fork hasn't
+# decided on yet. Full `go test ./...` and a Bazel-based job (matching
+# how Buildkite actually builds this fork) are reasonable follow-ups once
+# this baseline is in place and proven stable.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: go build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go build ./...
+        run: go build ./...
+
+      # core/epoch and cmd/prysmctl: the LightChain-patched packages this
+      # baseline CI covers. core/altair is deliberately NOT included yet -
+      # TestProcessEpoch_CanProcess and TestProcessEpoch_CanProcessBellatrix
+      # currently fail against main, unrelated to this PR. See the PR
+      # description for details; tracked as a follow-up rather than
+      # shipping this workflow red on day one.
+      - name: go test (LightChain-patched packages)
+        run: >
+          go test
+          ./beacon-chain/core/epoch/...
+          ./cmd/prysmctl/...
