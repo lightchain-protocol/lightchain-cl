@@ -60,6 +60,45 @@ func InactivityEjectionThreshold() uint64 {
 	return leakEpochs * cfg.InactivityScoreBias
 }
 
+// inactivityEjectionFloorAnchorSeconds is how far back, in wall-clock time,
+// the quorum-floor snapshot looks to determine the active-set size the
+// ejection floor is measured against.
+//
+// Anchoring to a fixed point in the past — rather than to the current,
+// already-shrinking active count — matters because the floor is
+// re-evaluated every epoch. If an outage runs longer than one epoch past
+// the inactivity-ejection threshold, a live-count floor still compounds
+// down (2/3, then 2/3 of that, then 2/3 of that...) and can erode the
+// active set close to zero, just more slowly than with no floor at all.
+// Anchoring to a snapshot from before the outage started removes the
+// compounding: the floor stays fixed relative to a stable point rather
+// than chasing the shrinking present.
+//
+// 24h comfortably exceeds inactivityEjectionMinDowntimeSeconds (6h), so
+// the anchor epoch normally falls before any inactivity-driven ejection
+// has had a chance to occur — it only starts reflecting a partially-eroded
+// set once a single continuous outage exceeds 24h itself, which is well
+// outside the incident this mechanism is designed to survive.
+const inactivityEjectionFloorAnchorSeconds uint64 = 24 * 60 * 60 // 24 hours
+
+// inactivityEjectionFloorAnchorEpoch returns the epoch to use as the
+// quorum-floor snapshot point: currentEpoch minus the anchor lookback,
+// clamped to epoch 0 for chains younger than the lookback window.
+func inactivityEjectionFloorAnchorEpoch(currentEpoch primitives.Epoch) primitives.Epoch {
+	cfg := params.BeaconConfig()
+	epochSeconds := cfg.SecondsPerSlot * uint64(cfg.SlotsPerEpoch)
+	if epochSeconds == 0 {
+		// Misconfigured chain params: no lookback, same as pre-anchor
+		// behavior (fails toward the safer, more conservative floor).
+		return currentEpoch
+	}
+	lookback := primitives.Epoch(inactivityEjectionFloorAnchorSeconds / epochSeconds)
+	if lookback >= currentEpoch {
+		return 0
+	}
+	return currentEpoch - lookback
+}
+
 // ProcessRegistryUpdates rotates validators in and out of active pool.
 // the amount to rotate is determined churn limit.
 //
@@ -125,6 +164,13 @@ func ProcessRegistryUpdates(ctx context.Context, st state.BeaconState) (state.Be
 	inactivityCandidates := make([]primitives.ValidatorIndex, 0)
 	activeCount := 0
 	inactivityThreshold := InactivityEjectionThreshold()
+	// LightChain: the quorum floor is measured against the active-set size
+	// as of anchorEpoch (a fixed point in the past), not the current
+	// epoch's count — see inactivityEjectionFloorAnchorSeconds. Computed
+	// from each validator's existing activation/exit epoch fields, so no
+	// new consensus state is required.
+	anchorEpoch := inactivityEjectionFloorAnchorEpoch(currentEpoch)
+	anchorActiveCount := 0
 
 	if err := st.ReadFromEveryValidator(func(idx int, val state.ReadOnlyValidator) error {
 		// Collect validators eligible to enter the activation queue.
@@ -136,6 +182,9 @@ func ProcessRegistryUpdates(ctx context.Context, st state.BeaconState) (state.Be
 		isActive := helpers.IsActiveValidatorUsingTrie(val, currentEpoch)
 		if isActive {
 			activeCount++
+		}
+		if helpers.IsActiveValidatorUsingTrie(val, anchorEpoch) {
+			anchorActiveCount++
 		}
 		belowEjectionBalance := val.EffectiveBalance() <= ejectionBal
 		// LightChain: also eject validators with persistent inactivity.
@@ -161,15 +210,19 @@ func ProcessRegistryUpdates(ctx context.Context, st state.BeaconState) (state.Be
 	}
 
 	// LightChain quorum floor: inactivity ejections may never shrink the
-	// active set below 2/3 of its current size (minimum 1). During a
-	// chain-wide outage every validator's score rises together; without this
-	// cap a single long halt force-exits the entire set and permanently
-	// bricks the chain (2026-08-11 mainnet incident). Candidates are capped
-	// in ascending validator-index order, which is deterministic across
-	// nodes; spec (balance) ejections are mandatory and count against the
-	// remaining capacity but are never themselves capped.
+	// active set below 2/3 of its size as of anchorEpoch (minimum 1).
+	// During a chain-wide outage every validator's score rises together;
+	// without this cap a single long halt force-exits the entire set and
+	// permanently bricks the chain (2026-08-11 mainnet incident). The floor
+	// is anchored to a snapshot from before the outage (see
+	// inactivityEjectionFloorAnchorSeconds) rather than the live active
+	// count, so it doesn't compound down epoch over epoch during a single
+	// extended outage. Candidates are capped in ascending validator-index
+	// order, which is deterministic across nodes; spec (balance) ejections
+	// are mandatory and count against the remaining capacity but are never
+	// themselves capped.
 	if len(inactivityCandidates) > 0 {
-		floor := (2 * activeCount) / 3
+		floor := (2 * anchorActiveCount) / 3
 		if floor < 1 {
 			floor = 1
 		}

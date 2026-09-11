@@ -415,6 +415,77 @@ func TestProcessRegistryUpdates_InactivityEjectionQuorumFloor(t *testing.T) {
 		"exactly activeCount-floor validators may be ejected; the quorum floor must hold")
 }
 
+// TestProcessRegistryUpdates_InactivityEjectionFloorDoesNotCompound pins the
+// fix for a gap in the original quorum floor: because the floor was
+// measured against the *current* (already-shrinking) active count, a single
+// outage spanning more than one epoch past the ejection threshold could
+// still erode the active set well below 2/3 of its pre-outage size —
+// 2/3, then 2/3 of that, then 2/3 of that again. Anchoring the floor to a
+// snapshot from before the outage (inactivityEjectionFloorAnchorEpoch)
+// fixes this without any new consensus state, by reconstructing historical
+// active-set membership from each validator's existing activation/exit
+// epoch fields.
+//
+// Scenario: 6 validators activated at genesis. Validators 0-1 were already
+// ejected for inactivity in an earlier round (ExitEpoch = 200). We process
+// a later epoch (300) where the 4 remaining validators are still inactive
+// (the outage is ongoing) — well within the 24h anchor window, so the
+// anchor epoch (300 - 225 = 75) predates the ejections. A live-count floor
+// would compute floor = 2*4/3 = 2 and permit ejecting 2 more of the
+// remaining 4; the anchored floor must compute floor = 2*6/3 = 4 against
+// the pre-outage count of 6, and therefore permit zero further ejections
+// (4 active, at the floor already).
+func TestProcessRegistryUpdates_InactivityEjectionFloorDoesNotCompound(t *testing.T) {
+	threshold := epoch.InactivityEjectionThreshold()
+	n := 6
+	validators := make([]*ethpb.Validator, n)
+	balances := make([]uint64, n)
+	scores := make([]uint64, n)
+	for i := 0; i < n; i++ {
+		exitEpoch := params.BeaconConfig().FarFutureEpoch
+		score := threshold + 100
+		if i < 2 {
+			// Already ejected in an earlier round, well after the anchor
+			// epoch (75) but before the current epoch (300).
+			exitEpoch = 200
+			score = 0
+		}
+		validators[i] = &ethpb.Validator{
+			ExitEpoch:        exitEpoch,
+			EffectiveBalance: params.BeaconConfig().MaxEffectiveBalance,
+		}
+		balances[i] = params.BeaconConfig().MaxEffectiveBalance
+		scores[i] = score
+	}
+	base := &ethpb.BeaconStateAltair{
+		Slot:                primitives.Slot(300 * uint64(params.BeaconConfig().SlotsPerEpoch)),
+		Validators:          validators,
+		Balances:            balances,
+		InactivityScores:    scores,
+		FinalizedCheckpoint: &ethpb.Checkpoint{Root: make([]byte, fieldparams.RootLength)},
+	}
+	beaconState, err := state_native.InitializeFromProtoAltair(base)
+	require.NoError(t, err)
+
+	newState, err := epoch.ProcessRegistryUpdates(t.Context(), beaconState)
+	require.NoError(t, err)
+
+	farFuture := params.BeaconConfig().FarFutureEpoch
+	vals := newState.Validators()
+	require.Equal(t, n, len(vals))
+
+	ejected := 0
+	for _, v := range vals {
+		if v.ExitEpoch != farFuture {
+			ejected++
+		}
+	}
+	assert.Equal(t, 2, ejected,
+		"only the 2 validators already ejected in the earlier round should be exited; "+
+			"the anchored floor must block ejecting any of the 4 still-active validators "+
+			"even though a live-count floor would permit it")
+}
+
 // TestProcessRegistryUpdates_Phase0NoInactivityScores verifies that the
 // LightChain patch does not break Phase 0 state processing. Phase 0 beacon
 // states have no inactivity scores field, and calling st.InactivityScores()
