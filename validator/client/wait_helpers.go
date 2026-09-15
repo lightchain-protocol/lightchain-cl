@@ -13,12 +13,20 @@ import (
 )
 
 // slotComponentDeadline returns the absolute time corresponding to the provided slot component.
+//
+// The delay is a fraction (basis points) of the slot's own length, taken from the
+// slot-duration schedule. On a chain that has scheduled a slot-time change the
+// base SlotComponentDuration would keep the pre-change length and push every
+// attestation, aggregate and sync-committee deadline one or more slots late once
+// the change is in effect. With a single-segment schedule this equals
+// SlotComponentDuration exactly.
 func (v *validator) slotComponentDeadline(slot primitives.Slot, component primitives.BP) (time.Time, error) {
 	startTime, err := slots.StartTime(v.genesisTime, slot)
 	if err != nil {
 		return time.Time{}, err
 	}
-	delay := params.BeaconConfig().SlotComponentDuration(component)
+	slotMillis := uint64(slots.SlotDurationAt(slot) / time.Millisecond)
+	delay := time.Duration(uint64(component)*slotMillis/uint64(params.BasisPoints)) * time.Millisecond
 	return startTime.Add(delay), nil
 }
 
