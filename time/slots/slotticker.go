@@ -85,7 +85,7 @@ func NewSlotTicker(genesisTime time.Time, secondsPerSlot uint64) *SlotTicker {
 		c:    make(chan primitives.Slot),
 		done: make(chan struct{}),
 	}
-	ticker.start(genesisTime, secondsPerSlot, prysmTime.Since, prysmTime.Until, time.After)
+	ticker.start(genesisTime, 0, secondsPerSlot, prysmTime.Since, prysmTime.Until, time.After)
 	return ticker
 }
 
@@ -104,12 +104,44 @@ func NewSlotTickerWithOffset(genesisTime time.Time, offset time.Duration, second
 		c:    make(chan primitives.Slot),
 		done: make(chan struct{}),
 	}
-	ticker.start(genesisTime.Add(offset), secondsPerSlot, prysmTime.Since, prysmTime.Until, time.After)
+	ticker.start(genesisTime, offset, secondsPerSlot, prysmTime.Since, prysmTime.Until, time.After)
 	return ticker
+}
+
+// scaleToSlot rescales an offset that a caller expressed against the base
+// slot length (SecondsPerSlot / SlotDuration) to the length of the given slot,
+// so the tick lands at the same fraction of the slot after a scheduled
+// slot-time change. Without a schedule, or before the first boundary, the
+// offset is returned unchanged. An offset shorter than the base slot stays
+// shorter than the slot it is scaled to, so a valid offset never crosses into
+// the next slot.
+func scaleToSlot(offset time.Duration, slot primitives.Slot) time.Duration {
+	segments := params.BeaconConfig().SlotTimeSchedule()
+	if len(segments) == 1 || offset == 0 {
+		return offset
+	}
+	base := time.Duration(segments[0].DurationMillis) * time.Millisecond
+	d := SlotDurationAt(slot)
+	if base <= 0 || d == base {
+		return offset
+	}
+	// Millisecond ratio: exact for configured durations and safe from overflow.
+	return time.Duration(int64(offset) * d.Milliseconds() / base.Milliseconds())
+}
+
+// tickTime is the wall-clock time of the tick for the slot at the given
+// offset, with the offset scaled to that slot's length.
+func tickTime(genesis time.Time, slot primitives.Slot, offset time.Duration) (time.Time, error) {
+	t, err := StartTime(genesis, slot)
+	if err != nil {
+		return t, err
+	}
+	return t.Add(scaleToSlot(offset, slot)), nil
 }
 
 func (s *SlotTicker) start(
 	genesisTime time.Time,
+	offset time.Duration,
 	secondsPerSlot uint64,
 	since, until func(time.Time) time.Duration,
 	after func(time.Duration) <-chan time.Time) {
@@ -118,21 +150,30 @@ func (s *SlotTicker) start(
 	// Only chains that have scheduled a slot-time change need the piecewise
 	// path. Everything else keeps the original fixed-interval arithmetic, which
 	// also preserves the caller-supplied secondsPerSlot when it deliberately
-	// differs from the global config (as some tests do).
+	// differs from the global config (as some tests do). That path folds the
+	// offset into the genesis time, as it always did; the piecewise path keeps
+	// the true genesis and scales the offset to each slot's own length.
 	scheduled := len(params.BeaconConfig().SlotTimeSchedule()) > 1
+	offsetGenesis := genesisTime.Add(offset)
 
 	go func() {
-		sinceGenesis := since(genesisTime)
+		sinceGenesis := since(offsetGenesis)
 
 		var nextTickTime time.Time
 		var slot primitives.Slot
 		if sinceGenesis < d {
 			// Handle when the current time is before the genesis time.
-			nextTickTime = genesisTime
+			nextTickTime = offsetGenesis
 			slot = 0
 		} else if scheduled {
-			slot = At(genesisTime, genesisTime.Add(sinceGenesis)) + 1
-			t, err := StartTime(genesisTime, slot)
+			now := genesisTime.Add(since(genesisTime))
+			slot = At(genesisTime, now)
+			t, err := tickTime(genesisTime, slot, offset)
+			if err == nil && !t.After(now) {
+				// This slot's tick is already behind us: the next one is due.
+				slot++
+				t, err = tickTime(genesisTime, slot, offset)
+			}
 			if err != nil {
 				log.WithError(err).Error("Could not compute slot start time; slot ticker stopping")
 				return
@@ -140,7 +181,7 @@ func (s *SlotTicker) start(
 			nextTickTime = t
 		} else {
 			nextTick := sinceGenesis.Truncate(d) + d
-			nextTickTime = genesisTime.Add(nextTick)
+			nextTickTime = offsetGenesis.Add(nextTick)
 			slot = primitives.Slot(nextTick / d)
 		}
 
@@ -153,7 +194,7 @@ func (s *SlotTicker) start(
 				if scheduled {
 					// Recompute rather than adding a constant: the interval
 					// changes at the boundary, and StartTime accounts for it.
-					t, err := StartTime(genesisTime, slot)
+					t, err := tickTime(genesisTime, slot, offset)
 					if err != nil {
 						log.WithError(err).Error("Could not compute slot start time; slot ticker stopping")
 						return
@@ -171,7 +212,10 @@ func (s *SlotTicker) start(
 
 // startWithIntervals starts a ticker that emits a tick every slot at the
 // prescribed intervals. The caller is responsible to make these intervals increasing and
-// less than secondsPerSlot
+// less than secondsPerSlot. The intervals are expressed against the base slot
+// length and scaled to each slot's own length: an interval longer than the
+// slot would otherwise push every later tick, including the next slot's first
+// one, past its slot.
 func (s *SlotIntervalTicker) startWithIntervals(
 	genesisTime time.Time,
 	until func(time.Time) time.Duration,
@@ -181,7 +225,7 @@ func (s *SlotIntervalTicker) startWithIntervals(
 		slot := CurrentSlot(genesisTime)
 		slot++
 		interval := 0
-		nextTickTime := UnsafeStartTime(genesisTime, slot).Add(intervals[0])
+		nextTickTime := UnsafeStartTime(genesisTime, slot).Add(scaleToSlot(intervals[0], slot))
 
 		for {
 			waitTime := until(nextTickTime)
@@ -193,7 +237,7 @@ func (s *SlotIntervalTicker) startWithIntervals(
 					interval = 0
 					slot++
 				}
-				nextTickTime = UnsafeStartTime(genesisTime, slot).Add(intervals[interval])
+				nextTickTime = UnsafeStartTime(genesisTime, slot).Add(scaleToSlot(intervals[interval], slot))
 			case <-s.done:
 				return
 			}
