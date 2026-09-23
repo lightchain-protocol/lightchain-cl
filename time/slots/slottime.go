@@ -292,10 +292,16 @@ func RoundUpToNearestEpoch(slot primitives.Slot) primitives.Slot {
 
 // VotingPeriodStartTime returns the current voting period's start time
 // depending on the provided genesis and current slot.
+// Goes through StartTime: the base slot length alone puts the period start in
+// the future once the chain has crossed a scheduled slot-time change, and the
+// execution service then never finds a block that recent.
 func VotingPeriodStartTime(genesis uint64, slot primitives.Slot) uint64 {
 	slots := params.BeaconConfig().SlotsPerEpoch.Mul(uint64(params.BeaconConfig().EpochsPerEth1VotingPeriod))
-	startTime := uint64((slot - slot.ModSlot(slots)).Mul(params.BeaconConfig().SlotDurationMillis())) / 1000
-	return genesis + startTime
+	start, err := StartTime(time.Unix(int64(genesis), 0), slot-slot.ModSlot(slots)) // lint:ignore uintcast -- Genesis time will never exceed int64 in seconds.
+	if err != nil {
+		return math.MaxUint64
+	}
+	return uint64(start.Unix())
 }
 
 // PrevSlot returns previous slot, with an exception in slot 0 to prevent underflow.

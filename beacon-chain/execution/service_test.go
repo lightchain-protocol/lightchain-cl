@@ -522,6 +522,60 @@ func TestNewService_EarliestVotingBlock(t *testing.T) {
 
 }
 
+// After a scheduled slot-time change the voting period must start at its real
+// wall-clock time. Timed with the base slot length it lands in the future, the
+// lookup fails with errBlockTimeTooLate and the service never finishes starting.
+func TestNewService_EarliestVotingBlock_AfterSlotTimeChange(t *testing.T) {
+	testAcc, err := mock.Setup()
+	require.NoError(t, err, "Unable to set up simulated backend")
+	beaconDB := dbutil.SetupDB(t)
+	server, endpoint, err := mockExecution.SetupRPCServer()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		server.Stop()
+	})
+	web3Service, err := NewService(t.Context(),
+		WithHttpEndpoint(endpoint),
+		WithDepositContractAddress(testAcc.ContractAddr),
+		WithDatabase(beaconDB),
+	)
+	require.NoError(t, err, "unable to setup web3 ETH1.0 chain service")
+	web3Service.rpcClient = &mockExecution.RPCClient{Backend: testAcc.Backend}
+
+	params.SetupTestConfigCleanup(t)
+	conf := params.BeaconConfig().Copy()
+	conf.SecondsPerETH1Block = 14
+	conf.Eth1FollowDistance = 1
+	conf.EpochsPerEth1VotingPeriod = 1
+	conf.SecondsPerSlot = 6
+	conf.SlotDurationMilliseconds = 6000
+	conf.SlotTimeForkOneSlot = 2 * uint64(conf.SlotsPerEpoch) // 6 s -> 2 s
+	conf.SlotTimeForkOneMillis = 2000
+	conf.SlotTimeForkTwoSlot = 0
+	conf.SlotTimeForkTwoMillis = 0
+	params.OverrideBeaconConfig(conf)
+
+	for range 100 {
+		testAcc.Backend.Commit()
+	}
+	head, err := testAcc.Backend.Client().HeaderByNumber(t.Context(), nil)
+	require.NoError(t, err)
+	require.NoError(t, testAcc.Backend.AdjustTime(time.Since(time.Unix(int64(head.Time), 0))))
+	testAcc.Backend.Commit()
+	head, err = testAcc.Backend.Client().HeaderByNumber(t.Context(), nil)
+	require.NoError(t, err)
+	web3Service.latestEth1Data.BlockHeight = head.Number.Uint64()
+	web3Service.latestEth1Data.BlockTime = head.Time
+	// The wall clock is 400 slots past the change: 64 slots of 6 s, then 400 of 2 s. Timed with
+	// the base length, the voting period would start about 25 minutes after the execution head.
+	elapsed := conf.SlotTimeForkOneSlot*6 + 400*2
+	web3Service.chainStartData.GenesisTime = uint64(time.Now().Unix()) - elapsed
+
+	blk, err := web3Service.determineEarliestVotingBlock(t.Context(), head.Number.Uint64())
+	require.NoError(t, err)
+	assert.Equal(t, true, blk <= head.Number.Uint64(), "earliest voting block after the head")
+}
+
 func TestNewService_Eth1HeaderRequLimit(t *testing.T) {
 	testAcc, err := mock.Setup()
 	require.NoError(t, err, "Unable to set up simulated backend")
