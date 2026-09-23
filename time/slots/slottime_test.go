@@ -772,3 +772,27 @@ func TestMaxEpoch(t *testing.T) {
 	_, err = EpochStart(maxEpoch)
 	require.NoError(t, err)
 }
+
+func TestVotingPeriodStartTime_ScheduledCut(t *testing.T) {
+	const genesis = uint64(1_000_000)
+	period := uint64(params.BeaconConfig().SlotsPerEpoch) * uint64(params.BeaconConfig().EpochsPerEth1VotingPeriod)
+
+	cfg := params.BeaconConfig().Copy()
+	cfg.SecondsPerSlot = 6
+	cfg.SlotDurationMilliseconds = 6000
+	cfg.SlotTimeForkOneSlot = period // cut at the start of the second voting period
+	cfg.SlotTimeForkOneMillis = 2000
+	cfg.SlotTimeForkTwoSlot = 0
+	cfg.SlotTimeForkTwoMillis = 0
+	params.SetActiveTestCleanup(t, cfg)
+
+	// Before the cut: plain 6 s arithmetic.
+	require.Equal(t, genesis, VotingPeriodStartTime(genesis, primitives.Slot(period-1)))
+	// Two periods after genesis: one period of 6 s slots plus one of 2 s slots, not 2 x 6 s.
+	got := VotingPeriodStartTime(genesis, primitives.Slot(2*period+5))
+	require.Equal(t, genesis+period*6+period*2, got)
+	// Must agree with StartTime of the period's first slot.
+	st, err := StartTime(time.Unix(int64(genesis), 0), primitives.Slot(2*period))
+	require.NoError(t, err)
+	require.Equal(t, uint64(st.Unix()), got)
+}
