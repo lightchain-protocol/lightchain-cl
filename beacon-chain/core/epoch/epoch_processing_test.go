@@ -319,7 +319,7 @@ func TestProcessRegistryUpdates_CanExits(t *testing.T) {
 // the chain's slot/epoch timing (see InactivityEjectionThreshold) so it
 // corresponds to the same wall-clock downtime on every chain config.
 func TestProcessRegistryUpdates_HighInactivityScoreEjected(t *testing.T) {
-	threshold := epoch.InactivityEjectionThreshold()
+	threshold := epoch.InactivityEjectionThreshold(0)
 	require.Equal(t, true, threshold > 0 && threshold < (1<<62),
 		"derived threshold must be a sane finite value")
 
@@ -366,6 +366,56 @@ func TestProcessRegistryUpdates_HighInactivityScoreEjected(t *testing.T) {
 		"validator 3 (score 0) must not be ejected")
 }
 
+// TestInactivityEjectionThreshold_ScheduledCut pins the threshold to 6 h of
+// leak on both sides of a scheduled slot-time change. Timed with the base slot
+// length, a 6 s -> 2 s cut would eject after 2 h: a score of 2400 after the cut
+// must not trigger an exit, 7200 must.
+func TestInactivityEjectionThreshold_ScheduledCut(t *testing.T) {
+	params.SetupTestConfigCleanup(t)
+	cfg := params.BeaconConfig().Copy()
+	cfg.SecondsPerSlot = 6
+	cfg.SlotDurationMilliseconds = 6000
+	cfg.SlotsPerEpoch = 6
+	cfg.InactivityScoreBias = 4
+	cfg.SlotTimeForkOneSlot = 60 // epoch 10
+	cfg.SlotTimeForkOneMillis = 2000
+	cfg.SlotTimeForkTwoSlot = 0
+	cfg.SlotTimeForkTwoMillis = 0
+	params.OverrideBeaconConfig(cfg)
+
+	// 6 h / (6 x 6 s) = 600 epochs; 6 h / (6 x 2 s) = 1800 epochs; x bias 4.
+	assert.Equal(t, uint64(2400), epoch.InactivityEjectionThreshold(9))
+	assert.Equal(t, uint64(7200), epoch.InactivityEjectionThreshold(10))
+
+	n := 6
+	validators := make([]*ethpb.Validator, n)
+	balances := make([]uint64, n)
+	for i := 0; i < n; i++ {
+		validators[i] = &ethpb.Validator{
+			ExitEpoch:        params.BeaconConfig().FarFutureEpoch,
+			EffectiveBalance: params.BeaconConfig().MaxEffectiveBalance,
+		}
+		balances[i] = params.BeaconConfig().MaxEffectiveBalance
+	}
+	base := &ethpb.BeaconStateAltair{
+		Slot:                100, // epoch 16, after the cut
+		Validators:          validators,
+		Balances:            balances,
+		InactivityScores:    []uint64{2400, 7200, 0, 0, 0, 0},
+		FinalizedCheckpoint: &ethpb.Checkpoint{Root: make([]byte, fieldparams.RootLength)},
+	}
+	beaconState, err := state_native.InitializeFromProtoAltair(base)
+	require.NoError(t, err)
+
+	newState, err := epoch.ProcessRegistryUpdates(t.Context(), beaconState)
+	require.NoError(t, err)
+
+	farFuture := params.BeaconConfig().FarFutureEpoch
+	vals := newState.Validators()
+	assert.Equal(t, farFuture, vals[0].ExitEpoch, "2 h of leak after the cut must not eject")
+	assert.NotEqual(t, farFuture, vals[1].ExitEpoch, "6 h of leak after the cut must eject")
+}
+
 // TestProcessRegistryUpdates_InactivityEjectionQuorumFloor pins the
 // LightChain quorum floor: when every validator's inactivity score crosses
 // the threshold at once (the chain-wide-outage signature of the 2026-08-11
@@ -373,7 +423,7 @@ func TestProcessRegistryUpdates_HighInactivityScoreEjected(t *testing.T) {
 // 2/3 of its size. With 6 active validators, floor = 4, so exactly 2 (the
 // lowest indices) are ejected and 4 must remain active.
 func TestProcessRegistryUpdates_InactivityEjectionQuorumFloor(t *testing.T) {
-	threshold := epoch.InactivityEjectionThreshold()
+	threshold := epoch.InactivityEjectionThreshold(0)
 	n := 6
 	validators := make([]*ethpb.Validator, n)
 	balances := make([]uint64, n)

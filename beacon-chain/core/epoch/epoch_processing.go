@@ -20,6 +20,7 @@ import (
 	"github.com/OffchainLabs/prysm/v7/math"
 	ethpb "github.com/OffchainLabs/prysm/v7/proto/prysm/v1alpha1"
 	"github.com/OffchainLabs/prysm/v7/runtime/version"
+	"github.com/OffchainLabs/prysm/v7/time/slots"
 	"github.com/pkg/errors"
 )
 
@@ -29,8 +30,8 @@ import (
 // penalty on this fork to preserve the fixed-supply invariant).
 //
 // The score threshold is derived from this duration at runtime via
-// InactivityEjectionThreshold, using the active chain config's
-// SECONDS_PER_SLOT, SLOTS_PER_EPOCH, and INACTIVITY_SCORE_BIAS. The original
+// InactivityEjectionThreshold, using the slot length the slot-time schedule
+// gives the current epoch, SLOTS_PER_EPOCH, and INACTIVITY_SCORE_BIAS. The original
 // implementation hardcoded 256, a value computed from Ethereum-mainnet epoch
 // timing (~6.8h of leak) — but on LightChain's 2s-slot / 6-slot-epoch chains
 // 256 was reached after ~13 minutes of non-finality. On 2026-08-11 a
@@ -42,18 +43,23 @@ import (
 const inactivityEjectionMinDowntimeSeconds uint64 = 6 * 60 * 60 // 6 hours
 
 // InactivityEjectionThreshold returns the inactivity score at or above which
-// a validator becomes a candidate for forced exit, derived from the active
-// beacon config so the threshold corresponds to
+// a validator becomes a candidate for forced exit at the given epoch, derived
+// from the active beacon config so the threshold corresponds to
 // inactivityEjectionMinDowntimeSeconds of continuous leak on this chain.
+// The epoch length comes from the slot-time schedule, not the base slot
+// length: after a scheduled cut to shorter slots the base length would reach
+// the threshold after a fraction of the intended downtime (6 s -> 2 s: 2 h).
+// Before any scheduled change the result is the same as the base arithmetic.
 // Exported for tests and operator tooling.
-func InactivityEjectionThreshold() uint64 {
+func InactivityEjectionThreshold(epoch primitives.Epoch) uint64 {
 	cfg := params.BeaconConfig()
-	epochSeconds := cfg.SecondsPerSlot * uint64(cfg.SlotsPerEpoch)
-	if epochSeconds == 0 || cfg.InactivityScoreBias == 0 {
+	start, err := slots.EpochStart(epoch)
+	epochMillis := uint64(slots.SlotDurationAt(start).Milliseconds()) * uint64(cfg.SlotsPerEpoch)
+	if err != nil || epochMillis == 0 || cfg.InactivityScoreBias == 0 {
 		// Misconfigured chain params: fail safe by never ejecting.
 		return ^uint64(0)
 	}
-	leakEpochs := inactivityEjectionMinDowntimeSeconds / epochSeconds
+	leakEpochs := inactivityEjectionMinDowntimeSeconds * 1000 / epochMillis
 	if leakEpochs == 0 {
 		leakEpochs = 1
 	}
@@ -124,7 +130,7 @@ func ProcessRegistryUpdates(ctx context.Context, st state.BeaconState) (state.Be
 	// from spec (balance) ejections so a quorum floor can cap them below.
 	inactivityCandidates := make([]primitives.ValidatorIndex, 0)
 	activeCount := 0
-	inactivityThreshold := InactivityEjectionThreshold()
+	inactivityThreshold := InactivityEjectionThreshold(currentEpoch)
 
 	if err := st.ReadFromEveryValidator(func(idx int, val state.ReadOnlyValidator) error {
 		// Collect validators eligible to enter the activation queue.
