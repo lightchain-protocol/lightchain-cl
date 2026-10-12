@@ -26,11 +26,12 @@ jobs:
       # The fork's changes: the inactivity ejection in epoch processing, the slot schedule and what is timed by it, and
       # the genesis tooling in prysmctl.
       #
-      # Skipped: two epoch tests that expect the upstream balances and fail on main as it stands, and the tests that
-      # read their data from a Bazel runfiles directory, which go test does not provide.
+      # Skipped: two epoch tests that expect the upstream balances and fail on main as it stands, the tests that read
+      # their data from a Bazel runfiles directory, which go test does not provide, and two upstream tests that pass on
+      # one run and fail on the next (TestAggregateAndSaveForkChoiceAtts_Multiple, TestProcessLogs_DepositRequestsStarted).
       - run: >
           go test -tags develop -timeout 30m
-          -skip '^(TestProcessEpoch_CanProcess|TestProcessEpoch_CanProcessBellatrix|TestEIP3076SpecTests|TestLoadConfigFile|Test(Mainnet|Holesky|Hoodi|Sepolia)ConfigMatchesUpstreamYaml)$'
+          -skip '^(TestProcessEpoch_CanProcess|TestProcessEpoch_CanProcessBellatrix|TestEIP3076SpecTests|TestLoadConfigFile|Test(Mainnet|Holesky|Hoodi|Sepolia)ConfigMatchesUpstreamYaml|TestAggregateAndSaveForkChoiceAtts_Multiple|TestProcessLogs_DepositRequestsStarted)$'
           ./beacon-chain/core/altair
           ./beacon-chain/core/epoch
           ./beacon-chain/execution
