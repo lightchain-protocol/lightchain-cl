@@ -1,0 +1,38 @@
+# Every pull request: build the tree and test the packages this fork changes. The rest is upstream Prysm and is tested
+# there.
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - run: go build ./...
+
+      # The fork's changes: the inactivity ejection in epoch processing, the slot schedule and what is timed by it, and
+      # the genesis tooling in prysmctl.
+      - run: >
+          go test -timeout 30m
+          ./beacon-chain/blockchain
+          ./beacon-chain/core/altair
+          ./beacon-chain/core/epoch
+          ./beacon-chain/execution
+          ./beacon-chain/operations/attestations
+          ./cmd/prysmctl/testnet
+          ./config/params
+          ./time/slots
+          ./validator/client
