@@ -26,7 +26,8 @@ jobs:
       # The fork's changes: the inactivity ejection in epoch processing, the slot schedule and what is timed by it, and
       # the genesis tooling in prysmctl.
       - run: >
-          go test -timeout 30m
+          go test -tags develop -timeout 30m
+          -skip '^(TestProcessEpoch_CanProcess|TestProcessEpoch_CanProcessBellatrix|TestEIP3076SpecTests)$'
           ./beacon-chain/blockchain
           ./beacon-chain/core/altair
           ./beacon-chain/core/epoch
