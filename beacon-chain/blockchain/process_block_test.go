@@ -1283,6 +1283,10 @@ func TestService_insertSlashingsToForkChoiceStoreElectra(t *testing.T) {
 func TestOnBlock_ProcessBlocksParallel(t *testing.T) {
 	service, tr := minimalTestService(t)
 	ctx := tr.ctx
+	// The service reports that it is not synced, so that postBlockProcess does not send the forkchoice update in the
+	// background. That goroutine can outlive the round that started it, and it locks and unlocks the forkchoice store
+	// of the service, which this test replaces after every round: it would lock one store and unlock the other.
+	service.cfg.SyncChecker = &mock.MockSyncChecker{}
 
 	gs, keys := util.DeterministicGenesisState(t, 32)
 	require.NoError(t, service.saveGenesisData(ctx, gs))
