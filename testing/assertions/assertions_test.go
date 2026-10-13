@@ -192,6 +192,15 @@ func TestAssert_DeepEqual(t *testing.T) {
 			expectedErr: "Values are not equal, expected != actual, diff:   struct{ i int }{\n- \ti: 42,\n+ \ti: 41,\n  }\n",
 		},
 		{
+			name: "non-equal slices",
+			args: args{
+				tb:       &assertions.TBMock{},
+				expected: []uint64{1, 2},
+				actual:   []uint64{1, 3},
+			},
+			expectedErr: "Values are not equal, expected != actual, diff:   []uint64{\n  \t1,\n- \t2,\n+ \t3,\n  }\n",
+		},
+		{
 			name: "custom error message",
 			args: args{
 				tb:       &assertions.TBMock{},
