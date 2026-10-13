@@ -463,11 +463,22 @@ func TestSaveOrphanedOps(t *testing.T) {
 
 	blkConfig := util.DefaultBlockGenConfig()
 	blkConfig.NumBLSChanges = 5
-	blkConfig.NumProposerSlashings = 1
-	blkConfig.NumAttesterSlashings = 1
-	blkConfig.NumVoluntaryExits = 1
 	blk3, err := util.GenerateFullBlock(st, keys, blkConfig, 3)
 	assert.NoError(t, err)
+	// The slashings and the exit are added here, for three fixed validators. GenerateFullBlock picks the validator of
+	// each of its operations independently at random, and a block in which two of them fall on the same validator is
+	// not valid: a validator can be slashed or exit only once.
+	proposerSlashing, err := util.GenerateProposerSlashingForValidator(st, keys[1], 1)
+	require.NoError(t, err)
+	attSlashing, err := util.GenerateAttesterSlashingForValidator(st, keys[2], 2)
+	require.NoError(t, err)
+	attesterSlashing, ok := attSlashing.(*ethpb.AttesterSlashing)
+	require.Equal(t, true, ok)
+	exit, err := util.GenerateVoluntaryExits(st, keys[3], 3)
+	require.NoError(t, err)
+	blk3.Block.Body.ProposerSlashings = []*ethpb.ProposerSlashing{proposerSlashing}
+	blk3.Block.Body.AttesterSlashings = []*ethpb.AttesterSlashing{attesterSlashing}
+	blk3.Block.Body.VoluntaryExits = []*ethpb.SignedVoluntaryExit{exit}
 	blk3.Block.ParentRoot = r2[:]
 	r3, err := blk3.Block.HashTreeRoot()
 	require.NoError(t, err)
