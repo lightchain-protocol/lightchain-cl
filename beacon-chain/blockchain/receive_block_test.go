@@ -1,6 +1,7 @@
 package blockchain
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -528,8 +529,16 @@ func Test_executePostFinalizationTasks(t *testing.T) {
 		require.Equal(t, true, ok)
 		require.Equal(t, primitives.ValidatorIndex(0), index) // first index
 
-		// check deposit
-		require.LogsContain(t, logHook, "Finalized deposit insertion completed at index")
+		// check deposit. The deposits are inserted by a goroutine of their own, which can still be running when the
+		// finalization event sent by the other one has arrived.
+		require.Eventually(t, func() bool {
+			for _, e := range logHook.AllEntries() {
+				if strings.Contains(e.Message, "Finalized deposit insertion completed at index") {
+					return true
+				}
+			}
+			return false
+		}, 5*time.Second, 50*time.Millisecond, "Expected log not found: Finalized deposit insertion completed at index")
 	})
 	t.Run("deposit requests started", func(t *testing.T) {
 		require.NoError(t, headState.SetEth1DepositIndex(1))
