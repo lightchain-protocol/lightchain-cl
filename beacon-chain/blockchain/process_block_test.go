@@ -1283,6 +1283,10 @@ func TestService_insertSlashingsToForkChoiceStoreElectra(t *testing.T) {
 func TestOnBlock_ProcessBlocksParallel(t *testing.T) {
 	service, tr := minimalTestService(t)
 	ctx := tr.ctx
+	// The service reports that it is not synced, so that postBlockProcess does not send the forkchoice update in the
+	// background. That goroutine can outlive the round that started it, and it locks and unlocks the forkchoice store
+	// of the service, which this test replaces after every round: it would lock one store and unlock the other.
+	service.cfg.SyncChecker = &mock.MockSyncChecker{}
 
 	gs, keys := util.DeterministicGenesisState(t, 32)
 	require.NoError(t, service.saveGenesisData(ctx, gs))
@@ -1398,6 +1402,14 @@ func Test_verifyBlkFinalizedSlot_invalidBlock(t *testing.T) {
 	require.Equal(t, true, IsInvalidBlock(err))
 }
 
+// withoutBackgroundFCU makes the service report that it is not synced, so that postBlockProcess does not send the
+// forkchoice update in the background. That goroutine can still be running after postBlockProcess has returned. In a
+// test that replaces the execution engine or the forkchoice store of its service in the meantime, the update is then
+// answered by the new engine, or the goroutine locks the old store and unlocks the new one.
+func withoutBackgroundFCU() Option {
+	return WithSyncChecker(&mock.MockSyncChecker{})
+}
+
 // See the description in #10777 and #10782 for the full setup
 // We sync optimistically a chain of blocks. Block 17 is the last block in Epoch
 // 2. Block 18 justifies block 12 (the first in Epoch 2) and Block 19 returns
@@ -1413,7 +1425,7 @@ func TestStore_NoViableHead_NewPayload(t *testing.T) {
 	params.OverrideBeaconConfig(config)
 
 	mockEngine := &mockExecution.EngineClient{ErrNewPayload: execution.ErrAcceptedSyncingPayloadStatus, ErrForkchoiceUpdated: execution.ErrAcceptedSyncingPayloadStatus}
-	service, tr := minimalTestService(t, WithExecutionEngineCaller(mockEngine))
+	service, tr := minimalTestService(t, WithExecutionEngineCaller(mockEngine), withoutBackgroundFCU())
 	ctx := tr.ctx
 
 	st, keys := util.DeterministicGenesisState(t, 64)
@@ -1883,7 +1895,7 @@ func TestNoViableHead_Reboot(t *testing.T) {
 	params.OverrideBeaconConfig(config)
 
 	mockEngine := &mockExecution.EngineClient{ErrNewPayload: execution.ErrAcceptedSyncingPayloadStatus, ErrForkchoiceUpdated: execution.ErrAcceptedSyncingPayloadStatus}
-	service, tr := minimalTestService(t, WithExecutionEngineCaller(mockEngine))
+	service, tr := minimalTestService(t, WithExecutionEngineCaller(mockEngine), withoutBackgroundFCU())
 	ctx := tr.ctx
 
 	genesisState, keys := util.DeterministicGenesisState(t, 64)
@@ -3133,7 +3145,11 @@ func Test_postBlockProcess_EventSending(t *testing.T) {
 			events := notifier.ReceivedEvents()
 
 			if tt.expectEvent {
-				require.NotEqual(t, 0, len(events), "Expected event to be sent but none were received")
+				// The mock records an event in a goroutine of its own, which can take longer than the pause above.
+				require.Eventually(t, func() bool {
+					events = notifier.ReceivedEvents()
+					return len(events) != 0
+				}, 5*time.Second, 50*time.Millisecond, "Expected event to be sent but none were received")
 
 				// Verify it's a BlockProcessed event
 				foundBlockProcessed := false

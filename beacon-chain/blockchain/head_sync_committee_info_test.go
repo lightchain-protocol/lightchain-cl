@@ -5,6 +5,7 @@ import (
 
 	"github.com/OffchainLabs/prysm/v7/beacon-chain/cache"
 	"github.com/OffchainLabs/prysm/v7/beacon-chain/core/signing"
+	"github.com/OffchainLabs/prysm/v7/beacon-chain/core/transition"
 	"github.com/OffchainLabs/prysm/v7/config/params"
 	"github.com/OffchainLabs/prysm/v7/consensus-types/primitives"
 	"github.com/OffchainLabs/prysm/v7/testing/require"
@@ -12,7 +13,28 @@ import (
 	"github.com/OffchainLabs/prysm/v7/time/slots"
 )
 
+// shortSyncCommitteePeriod shortens the sync committee period for a test that advances the head state over several
+// periods with no attestations. Where upstream only drains the balance of a validator that does not attest, this fork
+// exits it once its inactivity score reaches epoch.InactivityEjectionThreshold, about six hours of leak. Under the
+// default config the score gets there at epoch 61, well inside the first period of 256 epochs, so validator 0, which
+// these tests ask about, would be in no later sync committee. With 8 epochs per period the periods under test end
+// before any validator is exited.
+//
+// The skip slot cache is keyed by the slot and the latest block header of the state it starts from, not by the config,
+// and the tests in this file all start from the same genesis state. It is disabled here so that a state advanced
+// under this config is not handed to a later test that runs under the default one.
+func shortSyncCommitteePeriod(t *testing.T) {
+	params.SetupTestConfigCleanup(t)
+	cfg := params.BeaconConfig().Copy()
+	cfg.EpochsPerSyncCommitteePeriod = 8
+	params.OverrideBeaconConfig(cfg)
+
+	transition.SkipSlotCache.Disable()
+	t.Cleanup(transition.SkipSlotCache.Enable)
+}
+
 func TestService_HeadSyncCommitteeIndices(t *testing.T) {
+	shortSyncCommitteePeriod(t)
 	s, _ := util.DeterministicGenesisStateAltair(t, params.BeaconConfig().TargetCommitteeSize)
 	c := testServiceWithDB(t)
 	c.head = &head{state: s}
@@ -21,6 +43,8 @@ func TestService_HeadSyncCommitteeIndices(t *testing.T) {
 	slot := 2*uint64(params.BeaconConfig().EpochsPerSyncCommitteePeriod)*uint64(params.BeaconConfig().SlotsPerEpoch) + 1
 	a, err := c.HeadSyncCommitteeIndices(t.Context(), 0, primitives.Slot(slot))
 	require.NoError(t, err)
+	// A validator in no committee gets no indices in any period, which would make the comparisons below meaningless.
+	require.NotEqual(t, 0, len(a))
 
 	// Current period where slot-2 across EPOCHS_PER_SYNC_COMMITTEE_PERIOD
 	slot = 3*uint64(params.BeaconConfig().EpochsPerSyncCommitteePeriod)*uint64(params.BeaconConfig().SlotsPerEpoch) - 2
@@ -50,6 +74,7 @@ func TestService_headCurrentSyncCommitteeIndices(t *testing.T) {
 }
 
 func TestService_headNextSyncCommitteeIndices(t *testing.T) {
+	shortSyncCommitteePeriod(t)
 	s, _ := util.DeterministicGenesisStateAltair(t, params.BeaconConfig().TargetCommitteeSize)
 	c := testServiceWithDB(t)
 	c.head = &head{state: s}

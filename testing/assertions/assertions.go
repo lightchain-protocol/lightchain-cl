@@ -55,10 +55,10 @@ func DeepEqual(loggerFn assertionLoggerFn, expected, actual any, msg ...any) {
 	if !isDeepEqual(expected, actual) {
 		errMsg := parseMsg("Values are not equal", msg...)
 		_, file, line, _ := runtime.Caller(2)
-		opts := cmp.Options{cmp.AllowUnexported(expected), cmp.AllowUnexported(actual)}
-		if _, isProto := expected.(proto.Message); isProto {
-			opts = append(opts, protocmp.Transform())
-		}
+		// cmp.AllowUnexported accepts struct values only and panics on anything else (a slice, a map, a pointer),
+		// which would end the whole test binary instead of reporting the difference. An exporter that allows
+		// every type has no such restriction, and protocmp.Transform only acts on the protobuf messages it meets.
+		opts := cmp.Options{cmp.Exporter(func(reflect.Type) bool { return true }), protocmp.Transform()}
 		diff := cmp.Diff(expected, actual, opts...)
 		loggerFn("%s:%d %s, expected != actual, diff: %s", filepath.Base(file), line, errMsg, diff)
 	}

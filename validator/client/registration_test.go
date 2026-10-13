@@ -147,6 +147,10 @@ func Test_signValidatorRegistration(t *testing.T) {
 }
 
 func TestValidator_SignValidatorRegistrationRequest(t *testing.T) {
+	// The clock is read once for the whole table. A registration already in the cache is stamped one second before the
+	// new one, and a second reading of the clock for it lands on the new one's second whenever a second boundary falls
+	// between the two readings.
+	now := uint64(time.Now().Unix())
 	for _, isSlashingProtectionMinimal := range [...]bool{false, true} {
 		_, m, validatorKey, finish := setup(t, isSlashingProtectionMinimal)
 		defer finish()
@@ -166,7 +170,7 @@ func TestValidator_SignValidatorRegistrationRequest(t *testing.T) {
 					Pubkey:       validatorKey.PublicKey().Marshal(),
 					FeeRecipient: make([]byte, fieldparams.FeeRecipientLength),
 					GasLimit:     30000000,
-					Timestamp:    uint64(time.Now().Unix()),
+					Timestamp:    now,
 				},
 				validatorSetter: func(t *testing.T) *validator {
 					v := validator{
@@ -180,7 +184,7 @@ func TestValidator_SignValidatorRegistrationRequest(t *testing.T) {
 							Pubkey:       validatorKey.PublicKey().Marshal(),
 							GasLimit:     30000000,
 							FeeRecipient: make([]byte, fieldparams.FeeRecipientLength),
-							Timestamp:    uint64(time.Now().Unix()),
+							Timestamp:    now,
 						},
 						Signature: make([]byte, 0),
 					}
@@ -194,7 +198,7 @@ func TestValidator_SignValidatorRegistrationRequest(t *testing.T) {
 					Pubkey:       validatorKey.PublicKey().Marshal(),
 					FeeRecipient: make([]byte, fieldparams.FeeRecipientLength),
 					GasLimit:     30000000,
-					Timestamp:    uint64(time.Now().Unix()),
+					Timestamp:    now,
 				},
 				validatorSetter: func(t *testing.T) *validator {
 					v := validator{
@@ -208,7 +212,7 @@ func TestValidator_SignValidatorRegistrationRequest(t *testing.T) {
 							Pubkey:       validatorKey.PublicKey().Marshal(),
 							GasLimit:     35000000,
 							FeeRecipient: make([]byte, fieldparams.FeeRecipientLength),
-							Timestamp:    uint64(time.Now().Unix() - 1),
+							Timestamp:    now - 1,
 						},
 						Signature: make([]byte, 0),
 					}
@@ -222,7 +226,7 @@ func TestValidator_SignValidatorRegistrationRequest(t *testing.T) {
 					Pubkey:       validatorKey.PublicKey().Marshal(),
 					FeeRecipient: byteval,
 					GasLimit:     30000000,
-					Timestamp:    uint64(time.Now().Unix()),
+					Timestamp:    now,
 				},
 				validatorSetter: func(t *testing.T) *validator {
 					v := validator{
@@ -236,7 +240,7 @@ func TestValidator_SignValidatorRegistrationRequest(t *testing.T) {
 							Pubkey:       validatorKey.PublicKey().Marshal(),
 							GasLimit:     30000000,
 							FeeRecipient: make([]byte, fieldparams.FeeRecipientLength),
-							Timestamp:    uint64(time.Now().Unix() - 1),
+							Timestamp:    now - 1,
 						},
 						Signature: make([]byte, 0),
 					}
@@ -250,7 +254,7 @@ func TestValidator_SignValidatorRegistrationRequest(t *testing.T) {
 					Pubkey:       validatorKey.PublicKey().Marshal(),
 					FeeRecipient: byteval,
 					GasLimit:     30000000,
-					Timestamp:    uint64(time.Now().Unix()),
+					Timestamp:    now,
 				},
 				validatorSetter: func(t *testing.T) *validator {
 					v := validator{
