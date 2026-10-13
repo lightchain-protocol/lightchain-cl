@@ -27,8 +27,11 @@ jobs:
       # genesis tooling in prysmctl, and the assertion helper the tests use.
       #
       # Skipped: the tests that read their data from a Bazel runfiles directory, which go test does not provide.
+      #
+      # -count=1 makes go test run every test. Without it, the build cache that setup-go restores also carries the test
+      # results of the last run, and a package whose test binary has not changed is reported as "ok (cached)" unrun.
       - run: >
-          go test -tags develop -timeout 30m
+          go test -count=1 -tags develop -timeout 30m
           -skip '^(TestEIP3076SpecTests|TestLoadConfigFile|Test(Mainnet|Holesky|Hoodi|Sepolia)ConfigMatchesUpstreamYaml)$'
           ./beacon-chain/blockchain
           ./beacon-chain/core/altair
