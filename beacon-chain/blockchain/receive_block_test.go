@@ -447,7 +447,9 @@ func Test_sendNewFinalizedEvent(t *testing.T) {
 
 	s.sendNewFinalizedEvent(s.ctx, st)
 
-	require.Equal(t, 1, len(notifier.ReceivedEvents()))
+	require.Eventually(t, func() bool {
+		return len(notifier.ReceivedEvents()) == 1
+	}, 5*time.Second, 50*time.Millisecond, "Expected exactly 1 state notification")
 	e := notifier.ReceivedEvents()[0]
 	assert.Equal(t, statefeed.FinalizedCheckpoint, int(e.Type))
 	fc, ok := e.Data.(*ethpbv1.EventFinalizedCheckpoint)

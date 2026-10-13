@@ -3133,7 +3133,11 @@ func Test_postBlockProcess_EventSending(t *testing.T) {
 			events := notifier.ReceivedEvents()
 
 			if tt.expectEvent {
-				require.NotEqual(t, 0, len(events), "Expected event to be sent but none were received")
+				// The mock records an event in a goroutine of its own, which can take longer than the pause above.
+				require.Eventually(t, func() bool {
+					events = notifier.ReceivedEvents()
+					return len(events) != 0
+				}, 5*time.Second, 50*time.Millisecond, "Expected event to be sent but none were received")
 
 				// Verify it's a BlockProcessed event
 				foundBlockProcessed := false
