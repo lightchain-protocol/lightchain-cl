@@ -139,6 +139,12 @@ func TestGetSpec(t *testing.T) {
 	config.AggregateDueBPSGloas = primitives.BP(127)
 	config.SyncMessageDueBPSGloas = primitives.BP(128)
 	config.ContributionDueBPSGloas = primitives.BP(129)
+	config.SlotTimeForkOneSlot = 200
+	config.SlotTimeForkOneMillis = 3000
+	config.SlotTimeForkTwoSlot = 300
+	config.SlotTimeForkTwoMillis = 2000
+	config.AttestationOffsetMs = 1000
+	config.AggregationOffsetMs = 1500
 	config.TerminalBlockHash = common.HexToHash("TerminalBlockHash")
 	config.TerminalBlockHashActivationEpoch = 72
 	config.TerminalTotalDifficulty = "73"
@@ -220,7 +226,9 @@ func TestGetSpec(t *testing.T) {
 	require.NoError(t, json.Unmarshal(writer.Body.Bytes(), &resp))
 	data, ok := resp.Data.(map[string]any)
 	require.Equal(t, true, ok)
-	assert.Equal(t, 192, len(data))
+	// Upstream spec keys plus the LightChain ones: SLOT_TIME_FORK_{ONE,TWO}_{SLOT,MS},
+	// ATTESTATION_OFFSET_MS and AGGREGATION_OFFSET_MS.
+	assert.Equal(t, 198, len(data))
 	for k, v := range data {
 		t.Run(k, func(t *testing.T) {
 			switch k {
@@ -494,6 +502,18 @@ func TestGetSpec(t *testing.T) {
 				assert.Equal(t, "128", v)
 			case "CONTRIBUTION_DUE_BPS_GLOAS":
 				assert.Equal(t, "129", v)
+			case "SLOT_TIME_FORK_ONE_SLOT":
+				assert.Equal(t, "200", v)
+			case "SLOT_TIME_FORK_ONE_MS":
+				assert.Equal(t, "3000", v)
+			case "SLOT_TIME_FORK_TWO_SLOT":
+				assert.Equal(t, "300", v)
+			case "SLOT_TIME_FORK_TWO_MS":
+				assert.Equal(t, "2000", v)
+			case "ATTESTATION_OFFSET_MS":
+				assert.Equal(t, "1000", v)
+			case "AGGREGATION_OFFSET_MS":
+				assert.Equal(t, "1500", v)
 			case "MAX_PER_EPOCH_ACTIVATION_CHURN_LIMIT":
 				assert.Equal(t, "8", v)
 			case "MAX_REQUEST_LIGHT_CLIENT_UPDATES":

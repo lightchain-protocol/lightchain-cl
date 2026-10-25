@@ -352,8 +352,34 @@ func SinceSlotStart(s primitives.Slot, genesis time.Time, timestamp time.Time) (
 // WithinVotingWindow returns whether the current time is within the voting window
 // (eg. 4 seconds on mainnet) of the current slot.
 func WithinVotingWindow(genesis time.Time, slot primitives.Slot) bool {
-	votingWindow := params.BeaconConfig().SlotComponentDuration(params.BeaconConfig().AttestationDueBPS)
-	return time.Since(UnsafeStartTime(genesis, slot)) < votingWindow
+	return time.Since(UnsafeStartTime(genesis, slot)) < AttestationDueAt(slot)
+}
+
+// AttestationDueAt returns how far into the given slot attestations are due,
+// using the slot's own length from the slot-duration schedule and the
+// chain's attestation offset (ATTESTATION_OFFSET_MS, else the basis-point
+// fraction). It is the single source for the attestation deadline on both the
+// validator client and the beacon node.
+func AttestationDueAt(slot primitives.Slot) time.Duration {
+	return params.BeaconConfig().AttestationDue(SlotDurationAt(slot), ToEpoch(slot))
+}
+
+// AggregationDueAt returns how far into the given slot aggregates are due
+// (AGGREGATION_OFFSET_MS, else the basis-point fraction).
+func AggregationDueAt(slot primitives.Slot) time.Duration {
+	return params.BeaconConfig().AggregationDue(SlotDurationAt(slot), ToEpoch(slot))
+}
+
+// SyncMessageDueAt returns how far into the given slot sync committee
+// messages are due. It follows the attestation offset when one is set.
+func SyncMessageDueAt(slot primitives.Slot) time.Duration {
+	return params.BeaconConfig().SyncMessageDue(SlotDurationAt(slot), ToEpoch(slot))
+}
+
+// ContributionDueAt returns how far into the given slot sync committee
+// contributions are due. It follows the aggregation offset when one is set.
+func ContributionDueAt(slot primitives.Slot) time.Duration {
+	return params.BeaconConfig().ContributionDue(SlotDurationAt(slot), ToEpoch(slot))
 }
 
 // MaxSafeEpoch gives the largest epoch value that can be safely converted to a slot.

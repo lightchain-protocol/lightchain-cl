@@ -583,8 +583,13 @@ func (s *Service) runLateBlockTasks() {
 		return
 	}
 
-	attThreshold := params.BeaconConfig().SecondsPerSlot / 3
-	ticker := slots.NewSlotTickerWithOffset(s.genesisTime, time.Duration(attThreshold)*time.Second, params.BeaconConfig().SecondsPerSlot)
+	// Fire at the attestation deadline of each slot (ATTESTATION_OFFSET_MS when
+	// set, else the spec fraction of the slot): a block that has not arrived by
+	// then is late for the attesters, which is what lateBlockTasks acts on.
+	// Previously this was SECONDS_PER_SLOT / 3 in whole seconds, which is 0 on
+	// a 2 s slot and so fired at the slot start.
+	ticker := slots.NewSlotTickerWithOffsetFunc(s.genesisTime, slots.AttestationDueAt)
+	defer ticker.Done()
 	for {
 		select {
 		case <-ticker.C():

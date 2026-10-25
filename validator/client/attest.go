@@ -262,7 +262,8 @@ func (v *validator) setHighestSlot(slot primitives.Slot) {
 // waitUntilAttestationDueOrValidBlock waits until (a) or (b) whichever comes first:
 //
 //	(a) the validator has received a valid block that is the same slot as input slot
-//	(b) the configured attestation due time has transpired (as basis points of the slot duration)
+//	(b) the configured attestation due time has transpired (ATTESTATION_OFFSET_MS,
+//	    or the basis-point fraction of the slot duration when it is not set)
 func (v *validator) waitUntilAttestationDueOrValidBlock(ctx context.Context, slot primitives.Slot) {
 	ctx, span := trace.StartSpan(ctx, "validator.waitUntilAttestationDueOrValidBlock")
 	defer span.End()
@@ -272,12 +273,7 @@ func (v *validator) waitUntilAttestationDueOrValidBlock(ctx context.Context, slo
 		return
 	}
 
-	cfg := params.BeaconConfig()
-	component := cfg.AttestationDueBPS
-	if slots.ToEpoch(slot) >= cfg.GloasForkEpoch {
-		component = cfg.AttestationDueBPSGloas
-	}
-	finalTime, err := v.slotComponentDeadline(slot, component)
+	finalTime, err := v.dutyDeadline(slot, attestationDue)
 	if err != nil {
 		log.WithError(err).WithField("slot", slot).Error("Slot overflows, unable to wait for attestation deadline")
 		return

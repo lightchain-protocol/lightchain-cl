@@ -207,14 +207,10 @@ func (v *validator) signSlotWithSelectionProof(ctx context.Context, pubKey [fiel
 // such that any attestations from this slot have time to reach the beacon node before creating
 // the aggregated attestation.
 //
-// Note: Historically this was ~2/3 of the slot, but may differ across forks (e.g. Gloas).
+// Note: Historically this was ~2/3 of the slot, but may differ across forks (e.g. Gloas)
+// and is AGGREGATION_OFFSET_MS into the slot when the chain config sets it.
 func (v *validator) waitUntilAggregateDue(ctx context.Context, slot primitives.Slot) {
-	cfg := params.BeaconConfig()
-	component := cfg.AggregateDueBPS
-	if slots.ToEpoch(slot) >= cfg.GloasForkEpoch {
-		component = cfg.AggregateDueBPSGloas
-	}
-	v.waitUntilSlotComponent(ctx, slot, component)
+	v.waitUntilDutyDue(ctx, slot, aggregationDue)
 }
 
 // This returns the signature of validator signing over aggregate and
