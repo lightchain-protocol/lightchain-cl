@@ -127,12 +127,9 @@ func (v *validator) SubmitSignedContributionAndProof(ctx context.Context, slot p
 		return
 	}
 
-	cfg := params.BeaconConfig()
-	component := cfg.ContributionDueBPS
-	if slots.ToEpoch(slot) >= cfg.GloasForkEpoch {
-		component = cfg.ContributionDueBPSGloas
-	}
-	v.waitUntilSlotComponent(ctx, slot, component)
+	// Contributions follow the aggregation offset (AGGREGATION_OFFSET_MS when
+	// set, otherwise CONTRIBUTION_DUE_BPS of the slot).
+	v.waitUntilDutyDue(ctx, slot, contributionDue)
 
 	coveredSubnets := make(map[uint64]bool)
 	for i, comIdx := range indexRes.Indices {

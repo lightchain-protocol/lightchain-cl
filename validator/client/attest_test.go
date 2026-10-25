@@ -757,6 +757,33 @@ func TestServer_WaitToSlotOneThird_ReceiveBlockSlot(t *testing.T) {
 	}
 }
 
+// With ATTESTATION_OFFSET_MS set the attester waits for the configured point in
+// the slot (here one half) rather than a third of it.
+func TestServer_WaitToAttestationOffset_UsesConfiguredOffset(t *testing.T) {
+	cfg := params.BeaconConfig().Copy()
+	cfg.SecondsPerSlot = 2
+	cfg.SlotDurationMilliseconds = 2000
+	cfg.AttestationOffsetMs = 1000
+	cfg.AggregationOffsetMs = 1500
+	params.SetActiveTestCleanup(t, cfg)
+
+	currentSlot := primitives.Slot(4)
+	start := time.Now()
+	genesisTime := start.Add(-time.Duration(currentSlot) * 2 * time.Second)
+	v := &validator{
+		genesisTime: genesisTime,
+		slotFeed:    new(event.Feed),
+	}
+
+	v.waitUntilAttestationDueOrValidBlock(t.Context(), currentSlot)
+
+	waited := time.Since(start)
+	// The legacy third of a 2 s slot is 666 ms; the configured offset is 1000 ms.
+	if waited < 950*time.Millisecond || waited > 1500*time.Millisecond {
+		t.Errorf("Wanted a wait of about 1000 ms for the configured attestation offset, waited %s", waited)
+	}
+}
+
 func Test_slashableAttestationCheck(t *testing.T) {
 	for _, isSlashingProtectionMinimal := range [...]bool{false, true} {
 		t.Run(fmt.Sprintf("SlashingProtectionMinimal:%v", isSlashingProtectionMinimal), func(t *testing.T) {

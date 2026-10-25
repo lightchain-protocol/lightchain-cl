@@ -67,6 +67,11 @@ func UnmarshalConfig(yamlFile []byte, conf *BeaconChainConfig) (*BeaconChainConf
 	conf.SqrRootSlotsPerEpoch = primitives.Slot(math.IntegerSquareRoot(uint64(conf.SlotsPerEpoch)))
 	// Recompute the fork schedule
 	conf.InitializeForkSchedule()
+	// LightChain: ATTESTATION_OFFSET_MS / AGGREGATION_OFFSET_MS must fit the
+	// slot and keep attestations ahead of aggregates.
+	if err := conf.ValidateDutyOffsets(); err != nil {
+		return nil, errors.Wrap(err, "invalid chain config")
+	}
 	log.Debugf("Config file values: %+v", conf)
 	return conf, nil
 }
@@ -251,6 +256,8 @@ func ConfigToYaml(cfg *BeaconChainConfig) []byte {
 		fmt.Sprintf("AGGREGATE_DUE_BPS_GLOAS: %d", cfg.AggregateDueBPSGloas),
 		fmt.Sprintf("SYNC_MESSAGE_DUE_BPS_GLOAS: %d", cfg.SyncMessageDueBPSGloas),
 		fmt.Sprintf("CONTRIBUTION_DUE_BPS_GLOAS: %d", cfg.ContributionDueBPSGloas),
+		fmt.Sprintf("ATTESTATION_OFFSET_MS: %d", cfg.AttestationOffsetMs),
+		fmt.Sprintf("AGGREGATION_OFFSET_MS: %d", cfg.AggregationOffsetMs),
 	}
 
 	if len(cfg.BlobSchedule) > 0 {

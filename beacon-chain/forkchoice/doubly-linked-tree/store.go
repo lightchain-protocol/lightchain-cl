@@ -135,7 +135,10 @@ func (s *Store) insert(ctx context.Context,
 		if err != nil {
 			return nil, fmt.Errorf("could not determine time since current slot started: %w", err)
 		}
-		boostThreshold := params.BeaconConfig().SlotComponentDuration(params.BeaconConfig().AttestationDueBPS)
+		// Proposer boost goes to the first block of the slot that arrived before
+		// the attestation deadline of that slot (ATTESTATION_OFFSET_MS when set),
+		// so the boost window and the attesters' voting time move together.
+		boostThreshold := slots.AttestationDueAt(currentSlot)
 		isFirstBlock := s.proposerBoostRoot == [32]byte{}
 		if currentSlot == slot && sss < boostThreshold && isFirstBlock {
 			s.proposerBoostRoot = root

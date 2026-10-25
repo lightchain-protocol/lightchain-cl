@@ -105,6 +105,17 @@ type BeaconChainConfig struct {
 	AggregateDueBPSGloas            primitives.BP    `yaml:"AGGREGATE_DUE_BPS_GLOAS" spec:"true"`             // AggregateDueBPSGloas defines the aggregate due time in basis points of the slot (Gloas).
 	SyncMessageDueBPSGloas          primitives.BP    `yaml:"SYNC_MESSAGE_DUE_BPS_GLOAS" spec:"true"`          // SyncMessageDueBPSGloas defines the sync message due time in basis points of the slot (Gloas).
 	ContributionDueBPSGloas         primitives.BP    `yaml:"CONTRIBUTION_DUE_BPS_GLOAS" spec:"true"`          // ContributionDueBPSGloas defines the contribution due time in basis points of the slot (Gloas).
+	// LightChain: absolute intra-slot due times. On short slots with few,
+	// geographically spread validators the spec fractions above leave too
+	// little time for a block to propagate before attesters vote. When set
+	// (non-zero) these replace the basis-point fractions for the attestation
+	// family (attestations, sync committee messages) and the aggregation
+	// family (aggregates, sync committee contributions) on both the validator
+	// client and the beacon node (proposer boost and late-block reorg
+	// cutoffs). Zero or absent keeps the spec fractions. See AttestationDue
+	// and AggregationDue.
+	AttestationOffsetMs uint64 `yaml:"ATTESTATION_OFFSET_MS" spec:"true"` // AttestationOffsetMs is the point in the slot, in milliseconds, at which attestations are due. 0 = ATTESTATION_DUE_BPS.
+	AggregationOffsetMs uint64 `yaml:"AGGREGATION_OFFSET_MS" spec:"true"` // AggregationOffsetMs is the point in the slot, in milliseconds, at which aggregates are due. 0 = AGGREGATE_DUE_BPS.
 
 	// Ethereum PoW parameters.
 	DepositChainID         uint64 `yaml:"DEPOSIT_CHAIN_ID" spec:"true"`         // DepositChainID of the eth1 network. This used for replay protection.
@@ -791,8 +802,90 @@ func (b *BeaconChainConfig) SlotDurationMillis() uint64 {
 
 // SlotComponentDuration returns the duration representing the given portion (in basis points) of a slot.
 func (b *BeaconChainConfig) SlotComponentDuration(bp primitives.BP) time.Duration {
-	ms := uint64(bp) * b.SlotDurationMillis() / uint64(BasisPoints)
+	return slotFraction(b.SlotDuration(), bp)
+}
+
+// slotFraction returns the given portion (in basis points) of a slot of the
+// given length, rounded down to the millisecond.
+func slotFraction(slotDuration time.Duration, bp primitives.BP) time.Duration {
+	ms := uint64(bp) * uint64(slotDuration/time.Millisecond) / uint64(BasisPoints)
 	return time.Duration(ms) * time.Millisecond
+}
+
+// dutyDue returns the point within a slot of the given length at which a duty
+// is due: the LightChain millisecond override when set, otherwise the spec
+// basis-point fraction for the epoch (pre- or post-Gloas).
+func (b *BeaconChainConfig) dutyDue(slotDuration time.Duration, epoch primitives.Epoch, overrideMs uint64, bp, bpGloas primitives.BP) time.Duration {
+	if overrideMs > 0 {
+		return time.Duration(overrideMs) * time.Millisecond
+	}
+	if epoch >= b.GloasForkEpoch {
+		bp = bpGloas
+	}
+	return slotFraction(slotDuration, bp)
+}
+
+// AttestationDue returns how far into a slot of the given length attestations
+// are due. It is ATTESTATION_OFFSET_MS when set, otherwise ATTESTATION_DUE_BPS
+// (or the Gloas value from the Gloas fork) of the slot. Every intra-slot
+// attestation deadline, on the validator client (when to attest) and on the
+// beacon node (proposer boost, late-block reorg "arrived early" cutoff), must
+// derive from this so that all nodes on the network agree.
+func (b *BeaconChainConfig) AttestationDue(slotDuration time.Duration, epoch primitives.Epoch) time.Duration {
+	return b.dutyDue(slotDuration, epoch, b.AttestationOffsetMs, b.AttestationDueBPS, b.AttestationDueBPSGloas)
+}
+
+// AggregationDue returns how far into a slot of the given length aggregates
+// are due. It is AGGREGATION_OFFSET_MS when set, otherwise AGGREGATE_DUE_BPS
+// (or the Gloas value from the Gloas fork) of the slot.
+func (b *BeaconChainConfig) AggregationDue(slotDuration time.Duration, epoch primitives.Epoch) time.Duration {
+	return b.dutyDue(slotDuration, epoch, b.AggregationOffsetMs, b.AggregateDueBPS, b.AggregateDueBPSGloas)
+}
+
+// SyncMessageDue returns how far into a slot of the given length sync
+// committee messages are due. It follows ATTESTATION_OFFSET_MS when set,
+// otherwise SYNC_MESSAGE_DUE_BPS.
+func (b *BeaconChainConfig) SyncMessageDue(slotDuration time.Duration, epoch primitives.Epoch) time.Duration {
+	return b.dutyDue(slotDuration, epoch, b.AttestationOffsetMs, b.SyncMessageDueBPS, b.SyncMessageDueBPSGloas)
+}
+
+// ContributionDue returns how far into a slot of the given length sync
+// committee contributions are due. It follows AGGREGATION_OFFSET_MS when set,
+// otherwise CONTRIBUTION_DUE_BPS.
+func (b *BeaconChainConfig) ContributionDue(slotDuration time.Duration, epoch primitives.Epoch) time.Duration {
+	return b.dutyDue(slotDuration, epoch, b.AggregationOffsetMs, b.ContributionDueBPS, b.ContributionDueBPSGloas)
+}
+
+// ValidateDutyOffsets checks ATTESTATION_OFFSET_MS and AGGREGATION_OFFSET_MS
+// against the slot-duration schedule: every effective due time must fall
+// inside the slot (also inside the shortest scheduled slot), and attestations
+// must be due before aggregates, since aggregators need the attestations to
+// have arrived. A config without either key always passes.
+func (b *BeaconChainConfig) ValidateDutyOffsets() error {
+	if b.AttestationOffsetMs == 0 && b.AggregationOffsetMs == 0 {
+		return nil
+	}
+	epochs := []primitives.Epoch{0}
+	if b.GloasForkEpoch != b.FarFutureEpoch && b.GloasForkEpoch > 0 {
+		epochs = append(epochs, b.GloasForkEpoch)
+	}
+	for _, seg := range b.SlotTimeSchedule() {
+		slotDuration := time.Duration(seg.DurationMillis) * time.Millisecond
+		for _, epoch := range epochs {
+			att := b.AttestationDue(slotDuration, epoch)
+			agg := b.AggregationDue(slotDuration, epoch)
+			if att >= slotDuration {
+				return fmt.Errorf("ATTESTATION_OFFSET_MS %d must be less than the slot duration %d ms (slot %d onward)", b.AttestationOffsetMs, seg.DurationMillis, seg.StartSlot)
+			}
+			if agg >= slotDuration {
+				return fmt.Errorf("AGGREGATION_OFFSET_MS %d must be less than the slot duration %d ms (slot %d onward)", b.AggregationOffsetMs, seg.DurationMillis, seg.StartSlot)
+			}
+			if att >= agg {
+				return fmt.Errorf("attestations must be due before aggregates: attestation offset %s is not less than aggregation offset %s (slot %d onward, epoch %d)", att, agg, seg.StartSlot, epoch)
+			}
+		}
+	}
+	return nil
 }
 
 // SlotTimeSegment is one entry of the slot-duration schedule: every slot from

@@ -108,6 +108,74 @@ func NewSlotTickerWithOffset(genesisTime time.Time, offset time.Duration, second
 	return ticker
 }
 
+// NewSlotTickerWithOffsetFunc starts and returns a SlotTicker that fires once
+// per slot at StartTime(slot) + offsetAt(slot). Unlike NewSlotTickerWithOffset
+// the offset is asked for every slot and used as is, never rescaled, so an
+// absolute deadline such as the attestation offset lands at the same point of
+// the slot before and after a scheduled slot-time change or a fork that moves
+// the deadline. offsetAt must return a value shorter than the slot.
+// This method panics if genesis time is zero or offsetAt is nil.
+// lint:nopanic -- Communicated panic in godoc commentary.
+func NewSlotTickerWithOffsetFunc(genesisTime time.Time, offsetAt func(primitives.Slot) time.Duration) *SlotTicker {
+	if genesisTime.Unix() == 0 {
+		panic("zero genesis time")
+	}
+	if offsetAt == nil {
+		panic("nil ticker offset function")
+	}
+	ticker := &SlotTicker{
+		c:    make(chan primitives.Slot),
+		done: make(chan struct{}),
+	}
+	ticker.startWithOffsetFunc(genesisTime, offsetAt, prysmTime.Since, prysmTime.Until, time.After)
+	return ticker
+}
+
+func (s *SlotTicker) startWithOffsetFunc(
+	genesisTime time.Time,
+	offsetAt func(primitives.Slot) time.Duration,
+	since, until func(time.Time) time.Duration,
+	after func(time.Duration) <-chan time.Time) {
+	tick := func(slot primitives.Slot) (time.Time, error) {
+		t, err := StartTime(genesisTime, slot)
+		if err != nil {
+			return t, err
+		}
+		return t.Add(offsetAt(slot)), nil
+	}
+	go func() {
+		var slot primitives.Slot
+		sinceGenesis := since(genesisTime)
+		if sinceGenesis > 0 {
+			slot = At(genesisTime, genesisTime.Add(sinceGenesis))
+		}
+		nextTickTime, err := tick(slot)
+		if err == nil && sinceGenesis > 0 && since(nextTickTime) > 0 {
+			// This slot's tick is already behind us: the next one is due.
+			slot++
+			nextTickTime, err = tick(slot)
+		}
+		if err != nil {
+			log.WithError(err).Error("Could not compute slot start time; slot ticker stopping")
+			return
+		}
+		for {
+			select {
+			case <-after(until(nextTickTime)):
+				s.c <- slot
+				slot++
+				nextTickTime, err = tick(slot)
+				if err != nil {
+					log.WithError(err).Error("Could not compute slot start time; slot ticker stopping")
+					return
+				}
+			case <-s.done:
+				return
+			}
+		}
+	}()
+}
+
 // scaleToSlot rescales an offset that a caller expressed against the base
 // slot length (SecondsPerSlot / SlotDuration) to the length of the given slot,
 // so the tick lands at the same fraction of the slot after a scheduled
