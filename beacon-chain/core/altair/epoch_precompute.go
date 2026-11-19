@@ -2,6 +2,8 @@ package altair
 
 import (
 	"context"
+	stdmath "math"
+	"math/bits"
 
 	"github.com/OffchainLabs/prysm/v7/beacon-chain/core/epoch/precompute"
 	"github.com/OffchainLabs/prysm/v7/beacon-chain/core/helpers"
@@ -352,12 +354,25 @@ func attestationDelta(
 	// Process finality delay penalty
 	// Apply an additional penalty to validators that did not vote on the correct target or slashed
 	if !val.IsPrevEpochTargetAttester || val.IsSlashed {
-		n, err := math.Mul64(effectiveBalance, val.InactivityScore)
-		if err != nil {
-			return &AttDelta{}, err
-		}
-		attDelta.InactivityPenalty = n / inactivityDenominator
+		attDelta.InactivityPenalty = inactivityPenalty(effectiveBalance, val.InactivityScore, inactivityDenominator)
 	}
 
 	return attDelta, nil
+}
+
+// inactivityPenalty returns effectiveBalance * inactivityScore / denominator,
+// computed with a 128-bit product.
+//
+// LightChain: the effective balance is 5e14 Gwei, so the 64-bit product
+// overflows once the inactivity score passes 36893, about 9224 epochs without
+// finality. Returning an error there fails every epoch transition and halts
+// the chain. The quotient is the exact spec value whenever it fits in 64
+// bits; it saturates when it does not, or when the denominator is zero.
+func inactivityPenalty(effectiveBalance, inactivityScore, denominator uint64) uint64 {
+	hi, lo := bits.Mul64(effectiveBalance, inactivityScore)
+	if hi >= denominator {
+		return stdmath.MaxUint64
+	}
+	q, _ := bits.Div64(hi, lo, denominator)
+	return q
 }
