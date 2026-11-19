@@ -548,3 +548,48 @@ func testStateBellatrix() (state.BeaconState, error) {
 		Balances:         []uint64{0, 0, 0, 0},
 	})
 }
+
+func TestInactivityPenalty(t *testing.T) {
+	// LightChain mainnet: 5e14 Gwei effective balance, bias 4, Bellatrix quotient 2^24.
+	const balance = uint64(500_000_000_000_000)
+	const denominator = uint64(4 * 16777216)
+
+	tests := []struct {
+		name        string
+		balance     uint64
+		score       uint64
+		denominator uint64
+		want        uint64
+	}{
+		{name: "zero score", balance: balance, score: 0, denominator: denominator, want: 0},
+		{name: "small product", balance: balance, score: 4, denominator: denominator, want: 29802322},
+		{name: "last score whose product fits in 64 bits", balance: balance, score: 36892, denominator: denominator, want: 274866819381},
+		{name: "first score whose product overflows 64 bits", balance: balance, score: 36896, denominator: denominator, want: 274896621704},
+		{name: "one year without finality", balance: balance, score: 4 * 2_628_000, denominator: denominator, want: 78320503234863},
+		{name: "quotient does not fit", balance: math.MaxUint64, score: math.MaxUint64, denominator: 2, want: math.MaxUint64},
+		{name: "zero denominator", balance: balance, score: 4, denominator: 0, want: math.MaxUint64},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, inactivityPenalty(tt.balance, tt.score, tt.denominator))
+		})
+	}
+}
+
+// The 64-bit product of the effective balance and the inactivity score used to
+// overflow after about 9224 epochs without finality, and the error halted
+// every epoch transition.
+func TestAttestationDelta_InactivityScoreProductOverflows64Bits(t *testing.T) {
+	const balance = uint64(500_000_000_000_000)
+	const denominator = uint64(4 * 16777216)
+	val := &precompute.Validator{
+		IsActivePrevEpoch:            true,
+		CurrentEpochEffectiveBalance: balance,
+		InactivityScore:              36896,
+	}
+	bal := &precompute.Balance{ActiveCurrentEpoch: 69 * balance}
+
+	delta, err := attestationDelta(bal, val, 0, denominator, true)
+	require.NoError(t, err)
+	require.Equal(t, uint64(274896621704), delta.InactivityPenalty)
+}
