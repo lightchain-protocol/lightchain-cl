@@ -43,3 +43,18 @@ jobs:
           ./testing/assertions
           ./time/slots
           ./validator/client
+          ./beacon-chain/sync/initial-sync
+          ./config/features
+      # LightChain: the last two packages above are for the execution-client fault guards (audit 2026-11-20 S1, S2, S4):
+      # initial sync must not downscore peers for an engine INVALID, and the --allow-duties-with-el-rejecting-head flag.
+
+      # LightChain: the execution-client fault guards in two packages that cannot run whole here: beacon-chain/sync has
+      # timing tests that fail under load (TestFilterSubnetPeers, TestProcessAttestationBucket), and the validator RPC
+      # package has 21 tests that fail on main without Bazel's config (Slashings length, sync aggregate, duties v2). So
+      # only the guard tests and the existing tests of the code they change: block subscriber, gossip block validation,
+      # pending block queue, attestation data and the optimistic block-production check.
+      - run: >
+          go test -count=1 -tags develop -timeout 30m
+          -run 'EngineInvalid|BeaconBlockSubscribe|beaconBlockSubscriber|ValidateBeaconBlockPubSub|PendingBlocks|ExecutionRejectedNewerThanHead|^TestGetAttestationData|^TestServer_GetBeaconBlock_Optimistic$'
+          ./beacon-chain/sync
+          ./beacon-chain/rpc/prysm/v1alpha1/validator
