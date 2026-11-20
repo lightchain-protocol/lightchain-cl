@@ -119,6 +119,9 @@ type FinalizationFetcher interface {
 type OptimisticModeFetcher interface {
 	IsOptimistic(ctx context.Context) (bool, error)
 	IsOptimisticForRoot(ctx context.Context, root [32]byte) (bool, error)
+	// LightChain: added so the validator RPC servers, which already hold this interface, can refuse duties while
+	// the execution engine is rejecting blocks newer than the head.
+	ExecutionRejectedNewerThanHead() bool
 }
 
 // FinalizedCheckpt returns the latest finalized checkpoint from chain store.

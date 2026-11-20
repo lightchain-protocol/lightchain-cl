@@ -220,6 +220,13 @@ var (
 		Name:  "ignore-unviable-attestations",
 		Usage: "Ignores attestations whose target state is not viable with respect to the current head (avoid expensive state replay from lagging attesters).",
 	}
+	// LightChain: allowDutiesWithELRejectingHead disables the duty guard added after the 2026-11-20 fork. By default
+	// the node refuses block production and attestation data while its execution client has rejected a block newer
+	// than its head.
+	allowDutiesWithELRejectingHead = &cli.BoolFlag{
+		Name:  "allow-duties-with-el-rejecting-head",
+		Usage: "Disables the guard that makes the beacon node refuse block production and attestation data while its execution client has answered INVALID for a block newer than the current head.",
+	}
 )
 
 // devModeFlags holds list of flags that are set when development mode is on.
@@ -266,6 +273,7 @@ var BeaconChainFlags = combinedFlags([]cli.Flag{
 	SaveFullExecutionPayloads,
 	enableStartupOptimistic,
 	ignoreUnviableAttestations,
+	allowDutiesWithELRejectingHead, // LightChain: duty guard override, listed here so it is parsed and shown in help.
 	enableFullSSZDataLogging,
 	disableVerboseSigVerification,
 	enableProposerPreprocessing,

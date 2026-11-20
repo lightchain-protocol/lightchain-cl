@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic" // LightChain: for the duty guard fields of Service.
 	"time"
 
 	"github.com/OffchainLabs/prysm/v7/async/event"
@@ -68,6 +69,9 @@ type Service struct {
 	lcStore                        *lightClient.Store
 	startWaitingDataColumnSidecars chan bool // for testing purposes only
 	syncCommitteeHeadState         *cache.SyncCommitteeHeadStateCache
+	// LightChain: state of the duty guard, see execution_rejected_guard.go. Atomics, so no lock is needed.
+	executionRejectedSlot      atomic.Uint64 // highest slot for which the engine returned INVALID; 0 = none.
+	executionRejectedWarnEpoch atomic.Uint64 // epoch+1 of the last guard warning, to log once per epoch.
 }
 
 // config options for the service.

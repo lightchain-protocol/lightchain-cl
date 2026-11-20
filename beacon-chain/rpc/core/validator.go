@@ -475,6 +475,14 @@ func (s *Service) GetAttestationData(
 		return nil, &RpcError{Reason: BadRequest, Err: errors.Errorf("invalid request: %v", err)}
 	}
 
+	// LightChain: do not serve attestation data for a head the execution client has moved past by rejecting a newer
+	// block: that head may be stale because of a local execution-client fault, and votes for it feed a fork
+	// (2026-11-20). Checked before the cache, so a cached result for this slot is not served either. The nil check
+	// keeps callers that build this service without a fetcher working; production always sets it.
+	if s.OptimisticModeFetcher != nil && s.OptimisticModeFetcher.ExecutionRejectedNewerThanHead() {
+		return nil, &RpcError{Reason: Unavailable, Err: errors.New("execution client rejected a block newer than the head, not serving attestation data (override: --allow-duties-with-el-rejecting-head)")}
+	}
+
 	committeeIndex := primitives.CommitteeIndex(0)
 	if slots.ToEpoch(req.Slot) < params.BeaconConfig().ElectraForkEpoch {
 		committeeIndex = req.CommitteeIndex

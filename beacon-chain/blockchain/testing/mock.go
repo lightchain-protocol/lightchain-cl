@@ -36,6 +36,7 @@ var ErrNilState = errors.New("nil state")
 
 // ChainService defines the mock interface for testing
 type ChainService struct {
+	ExecutionRejectedNewer      bool // LightChain: value returned by ExecutionRejectedNewerThanHead.
 	NotFinalized                bool
 	Optimistic                  bool
 	ValidAttestation            bool
@@ -571,6 +572,12 @@ func (s *ChainService) IsOptimistic(_ context.Context) (bool, error) {
 // InForkchoice mocks the same method in the chain service
 func (s *ChainService) InForkchoice(_ [32]byte) bool {
 	return !s.NotFinalized
+}
+
+// LightChain: ExecutionRejectedNewerThanHead mocks the same method in the chain service; tests set the
+// ExecutionRejectedNewer field.
+func (s *ChainService) ExecutionRejectedNewerThanHead() bool {
+	return s.ExecutionRejectedNewer
 }
 
 // IsOptimisticForRoot mocks the same method in the chain service.

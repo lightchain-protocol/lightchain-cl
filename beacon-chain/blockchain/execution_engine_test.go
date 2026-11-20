@@ -243,6 +243,7 @@ func Test_NotifyForkchoiceUpdate(t *testing.T) {
 				if tt.errString == ErrInvalidPayload.Error() {
 					require.Equal(t, true, IsInvalidBlock(err))
 					require.Equal(t, tt.headRoot, InvalidBlockRoot(err)) // Head root should be invalid. Not block root!
+					require.Equal(t, true, IsEngineInvalidBlock(err))    // LightChain: the FCU INVALID path is an engine verdict too.
 				}
 			} else {
 				require.NoError(t, err)
@@ -636,6 +637,9 @@ func Test_NotifyNewPayload(t *testing.T) {
 				require.ErrorContains(t, tt.errString, err)
 				if tt.invalidBlock {
 					require.Equal(t, true, IsInvalidBlock(err))
+					// LightChain: an engine INVALID is marked as such and its slot is recorded for the duty guard.
+					require.Equal(t, true, IsEngineInvalidBlock(err))
+					require.Equal(t, uint64(tt.blk.Block().Slot()), service.executionRejectedSlot.Load())
 				}
 			} else {
 				require.NoError(t, err)
