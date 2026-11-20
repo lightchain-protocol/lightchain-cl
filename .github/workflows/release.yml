@@ -16,15 +16,87 @@ env:
   IMAGE: ghcr.io/lightchain-protocol/prysm
 
 jobs:
+  # LightChain: release gate (audit 2026-11-20, R1). Before this job existed any pushed v* tag, from any branch, was
+  # published after the two-command smoke test below, with no unit test run. The release job now needs this one:
+  # it refuses a tag whose commit is not on main or on a release/* branch, then runs the tests of ci.yml on that
+  # commit. The release job builds the commit this job tested, not whatever the tag points to by then.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.provenance.outputs.commit }}
+    steps:
+      # LightChain: full history and every branch, so the ancestry check below can see main and release/*.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # LightChain: tag provenance, the first check. The ref must be a tag, and its commit must be an ancestor of (or
+      # equal to) origin/main or an origin/release/* branch. A tag on a feature or hotfix branch is refused: the
+      # deployed lc.2.x line must be released from a release/2.x branch, not from hotfix/inactivity-penalty-overflow.
+      - id: provenance
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! commit=$(git rev-parse --verify --quiet "refs/tags/${TAG}^{commit}"); then
+            echo "::error::${TAG} is not a tag in this repository"
+            exit 1
+          fi
+          test "$commit" = "$(git rev-parse HEAD)"
+          git rev-parse --verify --quiet refs/remotes/origin/main > /dev/null || { echo "::error::origin/main was not fetched"; exit 1; }
+          for branch in $(git for-each-ref --format='%(refname)' refs/remotes/origin/main 'refs/remotes/origin/release/*'); do
+            if git merge-base --is-ancestor "$commit" "$branch"; then
+              echo "${TAG} (${commit}) is on ${branch#refs/remotes/}"
+              echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "::error::${TAG} (${commit}) is not on origin/main or on any origin/release/* branch; refusing to release it"
+          exit 1
+
+      # LightChain: same Go version as ci.yml.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # LightChain: the tests. The commands are read from the check job of ci.yml in the tagged commit, so the gate
+      # runs exactly what CI runs for that commit and the two lists cannot drift. Fails if ci.yml is missing, if it has
+      # no go test command, or if a step uses an option (env, shell, working-directory) this loop would not copy.
+      - name: Tests from ci.yml
+        run: |
+          set -euo pipefail
+          ci=.github/workflows/ci.yml
+          extra=$(yq '.jobs.check.steps[] | select(has("run")) | keys | .[]' "$ci" | grep -vxE 'name|run' || true)
+          if [ -n "$extra" ]; then
+            echo "::error::a run step of ci.yml uses options the release gate does not copy: ${extra}"
+            exit 1
+          fi
+          n=$(yq '.jobs.check.steps | map(select(has("run"))) | length' "$ci")
+          yq '.jobs.check.steps[] | select(has("run")) | .run' "$ci" | grep 'go test' > /dev/null
+          for i in $(seq 0 $((n - 1))); do
+            cmd=$(yq ".jobs.check.steps | map(select(has(\"run\"))) | .[${i}].run" "$ci")
+            echo "::group::${cmd}"
+            bash -euo pipefail -c "$cmd"
+            echo "::endgroup::"
+          done
+
   release:
+    # LightChain: publish only after the provenance check and the tests passed on this commit.
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
+      # LightChain: build the commit the test job checked and tested, not the tag name again (a tag can be moved).
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: ${{ needs.test.outputs.commit }}
 
       - id: vars
         run: |
