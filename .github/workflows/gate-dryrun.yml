@@ -1,0 +1,69 @@
+# LightChain: TEMPORARY, removed in the next commit of this pull request. Runs the provenance and "Tests from ci.yml"
+# scripts of release.yml, extracted from release.yml itself, without publishing anything: the release workflow can
+# only run on a tag, and this PR must not tag. The test commands are only syntax-checked here (bash -n); CI runs them.
+name: gate-dryrun
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dryrun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Extract the scripts from release.yml
+        run: |
+          set -euo pipefail
+          yq --version
+          yq '.jobs.test.steps[] | select(.id == "provenance") | .run' .github/workflows/release.yml > "$RUNNER_TEMP/provenance.sh"
+          yq '.jobs.test.steps[] | select(.name == "Tests from ci.yml") | .run' .github/workflows/release.yml > "$RUNNER_TEMP/tests.sh"
+          grep -q 'merge-base --is-ancestor' "$RUNNER_TEMP/provenance.sh"
+          grep -q 'bash -euo pipefail -c "$cmd"' "$RUNNER_TEMP/tests.sh"
+          sed -i 's/bash -euo pipefail -c "\$cmd"/echo "would run: $cmd"; bash -n -c "$cmd"/' "$RUNNER_TEMP/tests.sh"
+          git log -1 --format='PR head under test: %H'
+
+      - name: Provenance accepts a tag on main
+        run: |
+          set -euo pipefail
+          git checkout -q v7.1.2-lc.3
+          GITHUB_OUTPUT="$RUNNER_TEMP/out1" TAG=v7.1.2-lc.3 bash "$RUNNER_TEMP/provenance.sh"
+          cat "$RUNNER_TEMP/out1"
+          grep -qx "commit=$(git rev-parse HEAD)" "$RUNNER_TEMP/out1"
+
+      - name: Provenance refuses a tag that is not on main or release/*
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git tag dryrun-not-on-main "$HEAD_SHA"
+          git checkout -q dryrun-not-on-main
+          if GITHUB_OUTPUT="$RUNNER_TEMP/out2" TAG=dryrun-not-on-main bash "$RUNNER_TEMP/provenance.sh"; then
+            echo "::error::provenance accepted a commit that is not on main"
+            exit 1
+          fi
+          echo "refused as expected"
+
+      - name: Provenance refuses a ref that is not a tag
+        run: |
+          set -euo pipefail
+          if GITHUB_OUTPUT="$RUNNER_TEMP/out3" TAG=main bash "$RUNNER_TEMP/provenance.sh"; then
+            echo "::error::provenance accepted a branch name"
+            exit 1
+          fi
+          echo "refused as expected"
+
+      - name: Tests from ci.yml, dry run
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git checkout -q "$HEAD_SHA"
+          bash "$RUNNER_TEMP/tests.sh"
