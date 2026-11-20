@@ -1,0 +1,94 @@
+# LightChain: copy of the live mainnet beacon chain config, used by
+# beacon-chain/core/transition/lightchain_mainnet_config_test.go to run state
+# transitions with the parameters mainnet really has (5e14 Gwei effective
+# balance, 6-slot epochs, BASE_REWARD_FACTOR 0, the slot-time fork).
+#
+# Source: redswitches-deploy/networks/mainnet/config.yml (the file every
+# mainnet beacon node is started with) at commit 13fcaaf of that repository,
+# copied on 2026-11-19. Everything below the marker line is that file, byte
+# for byte.
+#
+# KEEP IN SYNC: when the deployed config changes, copy it here again in the
+# same change. A test that runs against an outdated copy no longer tests
+# mainnet.
+#
+# ---- copied file starts below this line ----
+CONFIG_NAME: lightchain-mainnet
+
+PRESET_BASE: mainnet
+TERMINAL_TOTAL_DIFFICULTY: 0
+
+MIN_GENESIS_ACTIVE_VALIDATOR_COUNT: 64
+MIN_GENESIS_TIME: 0
+GENESIS_FORK_VERSION: 0x10000089
+GENESIS_DELAY: 0
+
+ALTAIR_FORK_VERSION: 0x10000090
+ALTAIR_FORK_EPOCH: 0
+BELLATRIX_FORK_VERSION: 0x10000091
+BELLATRIX_FORK_EPOCH: 0
+CAPELLA_FORK_VERSION: 0x10000092
+CAPELLA_FORK_EPOCH: 0
+DENEB_FORK_VERSION: 0x10000093
+DENEB_FORK_EPOCH: 0
+ELECTRA_FORK_VERSION: 0x10000094
+ELECTRA_FORK_EPOCH: 322000
+FULU_FORK_VERSION: 0x10000095
+FULU_FORK_EPOCH: 18446744073709551615
+
+SECONDS_PER_SLOT: 6
+SLOT_DURATION_MS: 6000
+SLOTS_PER_EPOCH: 6
+
+DEPOSIT_CHAIN_ID: 9200
+DEPOSIT_NETWORK_ID: 9200
+DEPOSIT_CONTRACT_ADDRESS: 0x4242424242424242424242424242424242424242
+
+ETH1_FOLLOW_DISTANCE: 1
+
+MAX_EFFECTIVE_BALANCE: 500000000000000    # 500,000 LCAI in gwei — stake required to be an active validator
+MIN_ACTIVATION_BALANCE: 500000000000000   # 500,000 LCAI — floor used by ValidatorMaxEffectiveBalance() for non-compounding
+MAX_EFFECTIVE_BALANCE_ELECTRA: 500000000000000  # 500,000 LCAI — Electra ceiling for compounding (type 2) validators.
+EJECTION_BALANCE: 250000000000000         # 250,000 LCAI — auto-ejected if effective balance drops below this.
+
+BASE_REWARD_FACTOR: 0                               # disables consensus-layer issuance.
+WHISTLEBLOWER_REWARD_QUOTIENT: 32                   # whistleblower of a slashing gets effective_balance/32
+
+MIN_SLASHING_PENALTY_QUOTIENT_BELLATRIX: 32         # initial slash = effective_balance/32 = ~15,625 LCAI.
+PROPORTIONAL_SLASHING_MULTIPLIER_BELLATRIX: 0       # disables correlation penalty on mass-slashing.
+
+
+MIN_PER_EPOCH_CHURN_LIMIT_ELECTRA: 500000000000000        # [OVERRIDE] 500,000 LCAI = exactly one validator per epoch.
+MAX_PER_EPOCH_ACTIVATION_EXIT_CHURN_LIMIT: 500000000000000  # [OVERRIDE] equal to the floor above: activation+exit gets
+MIN_PER_EPOCH_CHURN_LIMIT: 4              # [PIN] pre-Electra churn, unused after the fork; pinned so the
+CHURN_LIMIT_QUOTIENT: 65536               # [PIN] preset. Only reachable if total active balance ever exceeds
+MAX_PER_EPOCH_ACTIVATION_CHURN_LIMIT: 8   # [PIN] pre-Electra activation cap, unused after the fork.
+
+MIN_SLASHING_PENALTY_QUOTIENT_ELECTRA: 32   # [OVERRIDE] preset is 4096, which would cut the initial slashing
+WHISTLEBLOWER_REWARD_QUOTIENT_ELECTRA: 32   # [OVERRIDE] preset is 4096; 32 keeps WHISTLEBLOWER_REWARD_QUOTIENT's
+
+MAX_BLOBS_PER_BLOCK: 6                  # [PIN] Deneb ceiling, matches blobSchedule.cancun.max = 6.
+MAX_BLOBS_PER_BLOCK_ELECTRA: 9          # [PIN] Prague ceiling, matches blobSchedule.prague.max = 9.
+TARGET_BLOBS_PER_BLOCK_ELECTRA: 6       # [PIN] matches blobSchedule.prague.target = 6.
+BLOB_SIDECAR_SUBNET_COUNT_ELECTRA: 9    # [PIN] gossip topic count post-fork; must be identical on every node.
+MAX_REQUEST_BLOB_SIDECARS_ELECTRA: 1152 # [PIN] req/resp bound post-fork.
+BLOB_SCHEDULE: []                       # [OVERRIDE] the Prysm mainnet preset ships two BPO (blob-parameter-only)
+MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS: 12288 # [OVERRIDE] blob retention is denominated in EPOCHS, and this config
+
+MAX_PENDING_DEPOSITS_PER_EPOCH: 16      # [PIN] dequeue rate; irrelevant while the queue cannot fill.
+PENDING_DEPOSITS_LIMIT: 134217728       # [PIN] SSZ list bound in the Electra BeaconState — do not change.
+PENDING_PARTIAL_WITHDRAWALS_LIMIT: 134217728  # [PIN] SSZ list bound — do not change.
+PENDING_CONSOLIDATIONS_LIMIT: 262144    # [PIN] SSZ list bound — do not change.
+UNSET_DEPOSIT_REQUESTS_START_INDEX: 18446744073709551615  # [PIN] sentinel written into the state at the fork.
+MAX_DEPOSIT_REQUESTS_PER_PAYLOAD: 8192  # [PIN] SSZ bound on the execution requests — do not change.
+
+MAX_WITHDRAWAL_REQUESTS_PER_PAYLOAD: 16     # [PIN] SSZ bound — do not change.
+MAX_CONSOLIDATION_REQUESTS_PER_PAYLOAD: 2   # [PIN] SSZ bound — do not change.
+MAX_PENDING_PARTIALS_PER_WITHDRAWALS_SWEEP: 8  # [PIN] per-epoch sweep bound.
+FULL_EXIT_REQUEST_AMOUNT: 0                 # [PIN] amount that marks an EIP-7002 request as a full exit.
+
+MAX_ATTESTATIONS_ELECTRA: 8         # [PIN] SSZ bound — do not change.
+MAX_ATTESTER_SLASHINGS_ELECTRA: 1   # [PIN] SSZ bound — do not change.
+
+SLOT_TIME_FORK_ONE_SLOT: 2017074
+SLOT_TIME_FORK_ONE_MS: 2000

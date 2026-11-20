@@ -83,7 +83,9 @@ func TestProcessEpoch_CanProcessElectra(t *testing.T) {
 
 	b := st.Balances()
 	require.Equal(t, params.BeaconConfig().MaxValidatorsPerCommittee, uint64(len(b)))
-	require.Equal(t, uint64(44799839993), b[0])
+	// LightChain: upstream expects 44799839993. This fork does not subtract the inactivity penalty from balances
+	// (altair.ProcessRewardsAndPenaltiesPrecompute), so validator 0 keeps the 1907 Gwei penalty upstream takes.
+	require.Equal(t, uint64(44799841900), b[0])
 
 	s, err := st.InactivityScores()
 	require.NoError(t, err)
