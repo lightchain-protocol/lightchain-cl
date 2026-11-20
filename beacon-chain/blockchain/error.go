@@ -7,10 +7,17 @@ import (
 	"github.com/pkg/errors"
 )
 
+// LightChain: errEngineInvalidPayload marks an invalid-block error whose only cause is an INVALID verdict from the
+// execution engine. On 2026-11-19/20 a faulty execution client answered INVALID for valid blocks; callers that punish
+// (bad-block cache, peer downscoring) need to recognise that case.
+var errEngineInvalidPayload = errors.New("received an INVALID payload from execution engine")
+
 var (
 	// ErrInvalid indicates a verification failure that should result in peer downscoring.
 	// ErrInvalidPayload is returned when the payload is invalid
-	ErrInvalidPayload = invalidBlock{error: errors.New("received an INVALID payload from execution engine")}
+	// LightChain: the inner error is now the named sentinel errEngineInvalidPayload (same text), so that
+	// IsEngineInvalidBlock can tell an engine INVALID verdict from every other invalid-block reason.
+	ErrInvalidPayload = invalidBlock{error: errEngineInvalidPayload}
 	// ErrInvalidBlockHashPayloadStatus is returned when the payload has invalid block hash.
 	ErrInvalidBlockHashPayloadStatus = invalidBlock{error: errors.New("received an INVALID_BLOCK_HASH payload from execution engine")}
 	// ErrUndefinedExecutionEngineError is returned when the execution engine returns an error that is not defined
@@ -90,6 +97,17 @@ func IsInvalidBlock(e error) bool {
 	}
 	var d invalidBlockError
 	return errors.As(e, &d)
+}
+
+// LightChain: IsEngineInvalidBlock returns true if the error is an invalid-block error caused by an INVALID verdict
+// from the execution engine (newPayload or forkchoiceUpdated). Such an error still satisfies IsInvalidBlock and
+// verification.ErrInvalid, so fork-choice pruning is unchanged; the sync services use this to not cache the block as
+// bad and not downscore the peer, because the verdict may be a local execution-client fault.
+func IsEngineInvalidBlock(e error) bool {
+	if e == nil {
+		return false
+	}
+	return errors.Is(e, errEngineInvalidPayload)
 }
 
 // Unwrap ensures that any error using invalidBlock passes an errors.Is check for

@@ -75,6 +75,13 @@ func (vs *Server) GetBeaconBlock(ctx context.Context, req *ethpb.BlockRequest) (
 			log.WithError(err).Error("Fail to build block: node is optimistic")
 			return nil, status.Errorf(codes.Unavailable, "Validator is not ready to propose: %v", err)
 		}
+		// LightChain: do not build on a head the execution client has moved past by rejecting a newer block: that head
+		// may be stale because of a local execution-client fault, and proposing on it forks the chain (2026-11-20).
+		// Inside the post-Bellatrix branch, next to the optimistic check, because only then is there an execution engine.
+		if vs.OptimisticModeFetcher.ExecutionRejectedNewerThanHead() {
+			log.Error("Fail to build block: execution client rejected a block newer than the head")
+			return nil, status.Error(codes.Unavailable, "Execution client rejected a block newer than the head, not producing a block (override: --allow-duties-with-el-rejecting-head)")
+		}
 	}
 
 	head, parentRoot, err := vs.getParentState(ctx, req.Slot)

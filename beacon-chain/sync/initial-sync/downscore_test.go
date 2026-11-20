@@ -45,9 +45,25 @@ func TestUpdatePeerScorerStats(t *testing.T) {
 		downPeer  testDownscorePeer
 	}{
 		{
+			// LightChain: was blockchain.ErrInvalidPayload, an engine INVALID, which no longer downscores (case below);
+			// a state-transition failure is what still marks a peer as serving invalid blocks.
 			name:      "invalid block",
-			err:       blockchain.ErrInvalidPayload,
+			err:       errors.Wrap(verification.AsVerificationFailure(errors.New("bad state root")), "could not process block"),
 			downPeer:  testDownscoreBlock,
+			processed: 10,
+		},
+		{
+			// LightChain: the block hash check is not an engine INVALID verdict and stays punishable.
+			name:      "invalid block hash",
+			err:       blockchain.ErrInvalidBlockHashPayloadStatus,
+			downPeer:  testDownscoreBlock,
+			processed: 10,
+		},
+		{
+			// LightChain: an engine INVALID verdict may be a local execution-client fault (audit S4): the peer is not
+			// downscored and is credited for the blocks processed before it.
+			name:      "engine INVALID",
+			err:       errors.Wrap(blockchain.ErrInvalidPayload, "could not process batch"),
 			processed: 10,
 		},
 		{

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/OffchainLabs/prysm/v7/beacon-chain/blockchain" // LightChain: for IsEngineInvalidBlock.
 	"github.com/OffchainLabs/prysm/v7/beacon-chain/core/transition"
 	"github.com/OffchainLabs/prysm/v7/beacon-chain/das"
 	"github.com/OffchainLabs/prysm/v7/beacon-chain/sync"
@@ -457,7 +458,9 @@ func (s *Service) processBlocksWithDataColumns(ctx context.Context, bwbs []block
 }
 
 func isPunishableError(err error) bool {
-	return errors.Is(err, verification.ErrInvalid)
+	// LightChain: an execution engine INVALID verdict is not peer misbehaviour (audit finding S4): with a faulty
+	// local execution client it is the honest peers serving the canonical chain that would be downscored.
+	return errors.Is(err, verification.ErrInvalid) && !blockchain.IsEngineInvalidBlock(err)
 }
 
 // updatePeerScorerStats adjusts monitored metrics for a peer.

@@ -217,14 +217,17 @@ func (s *Service) validateExecutionAndConsensus(
 	}
 	eg, _ := errgroup.WithContext(ctx)
 	var postState state.BeaconState
+	var consensusErr error // LightChain: kept apart from the errgroup result, see below.
 	eg.Go(func() error {
 		var err error
 		postState, err = s.validateStateTransition(ctx, preState, block)
 		if errors.Is(err, ErrNotDescendantOfFinalized) {
-			return invalidBlock{error: err, root: block.Root()}
+			consensusErr = invalidBlock{error: err, root: block.Root()} // LightChain: remembered, see below.
+			return consensusErr
 		}
 		if err != nil {
-			return errors.Wrap(err, "failed to validate consensus state transition function")
+			consensusErr = errors.Wrap(err, "failed to validate consensus state transition function") // LightChain: remembered, see below.
+			return consensusErr
 		}
 		return nil
 	})
@@ -238,6 +241,13 @@ func (s *Service) validateExecutionAndConsensus(
 		return nil
 	})
 	if err := eg.Wait(); err != nil {
+		// LightChain: when both checks failed, return the consensus error. errgroup returns whichever failed first, so an
+		// engine INVALID could hide a consensus failure; the sync services do not cache or downscore on an engine INVALID
+		// (IsEngineInvalidBlock), so that verdict must be reported only when it is the only reason the block failed.
+		// Fork choice is unaffected: the engine path has already pruned in validateExecutionOnBlock.
+		if consensusErr != nil {
+			return nil, false, consensusErr
+		}
 		return nil, false, err
 	}
 	return postState, isValidPayload, nil

@@ -310,7 +310,9 @@ func (s *Service) receiveAndBroadCastBlock(ctx context.Context, b interfaces.Rea
 
 // handleBlockProcessingError handles errors during block processing.
 func (s *Service) handleBlockProcessingError(ctx context.Context, err error, b interfaces.ReadOnlySignedBeaconBlock, blkRoot [32]byte) {
-	if blockchain.IsInvalidBlock(err) {
+	// LightChain: same rule as in beaconBlockSubscriber: a block the execution engine called INVALID is not cached as
+	// bad, because the verdict may be a local execution-client fault and the cache is never cleared.
+	if blockchain.IsInvalidBlock(err) && !blockchain.IsEngineInvalidBlock(err) {
 		s.setBadBlock(ctx, blkRoot)
 	}
 	log.WithError(err).WithField("slot", b.Block().Slot()).Debug("Could not process block")

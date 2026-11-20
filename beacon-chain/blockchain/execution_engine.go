@@ -97,6 +97,8 @@ func (s *Service) notifyForkchoiceUpdate(ctx context.Context, arg *fcuConfig) (*
 			return payloadID, nil
 		case errors.Is(err, execution.ErrInvalidPayloadStatus):
 			forkchoiceUpdatedInvalidNodeCount.Inc()
+			// LightChain: remember the slot the engine rejected, for the duty guard (ExecutionRejectedNewerThanHead).
+			s.recordExecutionRejectedSlot(headBlk.Slot())
 			headRoot := arg.headRoot
 			if len(lastValidHash) == 0 {
 				lastValidHash = defaultLatestValidHash
@@ -281,6 +283,8 @@ func (s *Service) notifyNewPayload(ctx context.Context, stVersion int, header in
 	}
 	if errors.Is(err, execution.ErrInvalidPayloadStatus) {
 		log.WithFields(logFields).WithError(err).Error("Invalid payload status")
+		// LightChain: remember the slot the engine rejected, for the duty guard (ExecutionRejectedNewerThanHead).
+		s.recordExecutionRejectedSlot(blk.Block().Slot())
 		return false, invalidBlock{
 			error:         ErrInvalidPayload,
 			lastValidHash: bytesutil.ToBytes32(lastValidHash),

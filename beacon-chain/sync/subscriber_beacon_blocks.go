@@ -58,6 +58,13 @@ func (s *Service) beaconBlockSubscriber(ctx context.Context, msg proto.Message) 
 	}()
 
 	if err := s.cfg.chain.ReceiveBlock(ctx, signed, root, nil); err != nil {
+		// LightChain: an execution engine INVALID verdict may be a local execution-client fault (2026-11-19/20), so
+		// the block and its invalid ancestors are not put in the bad-block cache. That cache is never cleared and
+		// makes gossip validation REJECT every descendant, which downscores the honest peers that send them. Fork
+		// choice has already pruned the branch in ReceiveBlock; that is unchanged.
+		if blockchain.IsEngineInvalidBlock(err) {
+			return err
+		}
 		if blockchain.IsInvalidBlock(err) {
 			r := blockchain.InvalidBlockRoot(err)
 			if r != [32]byte{} {

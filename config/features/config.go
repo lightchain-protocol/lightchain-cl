@@ -69,6 +69,9 @@ type Flags struct {
 	DisableResourceManager     bool // Disables running the node with libp2p's resource manager.
 	DisableStakinContractCheck bool // Disables check for deposit contract when proposing blocks
 	IgnoreUnviableAttestations bool // Ignore attestations whose target state is not viable (avoids lagging-node DoS).
+	// LightChain: AllowDutiesWithELRejectingHead disables the guard that refuses block production and attestation
+	// data while the execution engine has rejected a block newer than the head. Default false = guard on.
+	AllowDutiesWithELRejectingHead bool
 
 	EnableHashtree               bool // Enables usage of the hashtree library for hashing
 	EnableVerboseSigVerification bool // EnableVerboseSigVerification specifies whether to verify individual signature if batch verification fails
@@ -287,6 +290,12 @@ func ConfigureBeaconChain(ctx *cli.Context) error {
 	if ctx.IsSet(blacklistRoots.Name) {
 		logEnabled(blacklistRoots)
 		cfg.BlacklistedRoots = parseBlacklistedRoots(ctx.StringSlice(blacklistRoots.Name))
+	}
+
+	// LightChain: the duty guard is on unless this flag is set (see blockchain/execution_rejected_guard.go).
+	if ctx.Bool(allowDutiesWithELRejectingHead.Name) {
+		logEnabled(allowDutiesWithELRejectingHead)
+		cfg.AllowDutiesWithELRejectingHead = true
 	}
 
 	cfg.IgnoreUnviableAttestations = false
